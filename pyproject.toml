@@ -1,0 +1,26 @@
+[project]
+name = "soundscout"
+version = "0.1.0"
+description = "SoundScout: generate recommendations and build Plex playlists from Last.fm listening data"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Ash" }]
+dependencies = [
+    "requests>=2.31",
+    "plexapi>=4.15",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "APScheduler>=3.10",
+    "flask>=3.0",
+    "flask-cors>=4.0"
+]
+
+[project.scripts]
+discover-weekly = "soundscout.run:main"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

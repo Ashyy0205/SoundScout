@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+.DS_Store
+
+# Data & Reports
+*.csv
+data/
+config/
+music/
+download_requests.json
+run_pipeline.ps1
+
+# IDE
+.vscode/
+.idea/
+
+# Scraper Build Artifacts
+scraper/scraper
+scraper/scraper.exe
+scraper/backend/ffmpeg/
+scraper/backend/ffprobe/

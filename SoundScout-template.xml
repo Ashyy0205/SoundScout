@@ -1,0 +1,116 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>SoundScout</Name>
+  <Repository>ghcr.io/ashyy0205/soundscout:main</Repository>
+  <Registry>ghcr.io</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/Ashyy0205/SoundScout/issues</Support>
+  <Project>https://github.com/Ashyy0205/SoundScout</Project>
+  <TemplateURL>https://raw.githubusercontent.com/Ashyy0205/SoundScout/main/SoundScout-template.xml</TemplateURL>
+  <Overview>
+    SoundScout is a self-hosted music discovery and acquisition app for Plex.
+    It uses Last.fm listening history to build personalised recommendations, lets users import Spotify playlists and albums, downloads missing music into your library, and keeps Plex playlists in sync from a Web UI.
+    Plex users can sign in individually, link their own Last.fm accounts, set per-user discovery schedules, and monitor artists so new releases are downloaded automatically.
+  </Overview>
+  <Category>MediaApp:Music Downloaders Network:Web Status:Beta</Category>
+  <WebUI>http://[IP]:[PORT:5000]/</WebUI>
+  <Icon>https://soundscoutlogo.sokhol.com/</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Description>
+    Automated Last.fm discovery, Spotify import, and music downloads for Plex.
+  </Description>
+  <Networking>
+    <Mode>bridge</Mode>
+    <Publish/>
+  </Networking>
+
+  <Data>
+    <Volume>
+      <HostDir>/mnt/user/Media/Music/</HostDir>
+      <ContainerDir>/music</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/appdata/soundscout/config</HostDir>
+      <ContainerDir>/config</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/appdata/soundscout/data</HostDir>
+      <ContainerDir>/app/data</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/appdata/soundscout/scraper</HostDir>
+      <ContainerDir>/root/.scraper</ContainerDir>
+      <Mode>ro</Mode>
+    </Volume>
+  </Data>
+
+  <Environment>
+    <Variable>
+      <Value>Europe/London</Value>
+      <Name>TZ</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value></Value>
+      <Name>PLEX_BASEURL</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>Music</Value>
+      <Name>PLEX_MUSIC_LIBRARY</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value></Value>
+      <Name>WEBUI_SECRET_KEY</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value></Value>
+      <Name>WEBUI_PUBLIC_URL</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>1</Value>
+      <Name>WEBUI_REQUIRE_PLEX_LOGIN</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>true</Value>
+      <Name>ENABLE_WEBUI</Name>
+      <Mode/>
+    </Variable>
+  </Environment>
+
+  <!-- Volumes -->
+  <Config Name="Music Library" Target="/music" Default="/mnt/user/Media/Music/" Mode="rw" Description="Path to your music library — downloaded tracks are saved here" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/Media/Music/</Config>
+  <Config Name="App Config" Target="/config" Default="/mnt/user/appdata/soundscout/config" Mode="rw" Description="Persistent config — stores Plex tokens, per-user settings, session data" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/soundscout/config</Config>
+  <Config Name="App Data" Target="/app/data" Default="/mnt/user/appdata/soundscout/data" Mode="rw" Description="Persistent data — download backlog and discovery reports" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/soundscout/data</Config>
+  <Config Name="Scraper Config" Target="/root/.scraper" Default="/mnt/user/appdata/soundscout/scraper" Mode="ro" Description="Folder containing config.json with Tidal/Qobuz credentials (required for downloads)" Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/soundscout/scraper</Config>
+
+  <!-- Port -->
+  <Config Name="Web UI Port" Target="5000" Default="5000" Mode="tcp" Description="Port for the SoundScout web interface" Type="Port" Display="always" Required="true" Mask="false">5000</Config>
+
+  <!-- Core settings -->
+  <Config Name="Timezone" Target="TZ" Default="Europe/London" Mode="" Description="Timezone for Auto Discovery schedules (e.g. America/New_York, Europe/London)" Type="Variable" Display="always" Required="true" Mask="false">Europe/London</Config>
+  <Config Name="Plex URL" Target="PLEX_BASEURL" Default="" Mode="" Description="URL of your Plex server, e.g. http://192.168.1.10:32400" Type="Variable" Display="always" Required="true" Mask="false"></Config>
+  <Config Name="Plex Music Library" Target="PLEX_MUSIC_LIBRARY" Default="Music" Mode="" Description="Name of your Plex music library section" Type="Variable" Display="always" Required="true" Mask="false">Music</Config>
+
+  <!-- Web UI -->
+  <Config Name="Session Secret Key" Target="WEBUI_SECRET_KEY" Default="" Mode="" Description="A long random string — keeps user sessions valid across container restarts. Generate one with: openssl rand -hex 32" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Public URL" Target="WEBUI_PUBLIC_URL" Default="" Mode="" Description="Public URL of this container, e.g. http://192.168.1.10:5000 — required for Plex OAuth sign-in to work" Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="Require Plex Login" Target="WEBUI_REQUIRE_PLEX_LOGIN" Default="1" Mode="" Description="Set to 1 to require Plex sign-in to use the Web UI (recommended)" Type="Variable" Display="always" Required="false" Mask="false">1</Config>
+
+  <!-- Acquisition -->
+</Container>

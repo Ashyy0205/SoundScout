@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <style>
+      :root{
+        --bg:#0B1116;
+        --fg:#D6E2EE;
+        --muted:#22303B;
+        --accent:#FFD84A;
+      }
+    </style>
+    <clipPath id="clip">
+      <circle cx="128" cy="128" r="92"/>
+    </clipPath>
+  </defs>
+
+  <rect width="256" height="256" rx="44" fill="var(--bg)"/>
+
+  <!-- Disc -->
+  <g id="disc" fill="none" stroke="var(--muted)" stroke-width="6">
+    <circle cx="128" cy="128" r="92"/>
+    <circle cx="128" cy="128" r="66"/>
+    <circle cx="128" cy="128" r="40"/>
+    <circle cx="128" cy="128" r="14"/>
+    <line x1="128" y1="36" x2="128" y2="220"/>
+    <line x1="36" y1="128" x2="220" y2="128"/>
+  </g>
+
+  <!-- Scan wedge -->
+  <g clip-path="url(#clip)">
+    <path id="wedge" d="M128 128 L128 34 A94 94 0 0 1 214 84 Z"
+          fill="var(--accent)" opacity="0.14"/>
+    <line id="scanLine" x1="128" y1="128" x2="214" y2="84"
+          stroke="var(--accent)" stroke-width="7" stroke-linecap="round" opacity="0.95"/>
+  </g>
+
+  <!-- Minimal “lock” ticks -->
+  <g id="ticks" stroke="var(--fg)" stroke-width="6" stroke-linecap="round" opacity="0.85">
+    <line x1="128" y1="22" x2="128" y2="40"/>
+    <line x1="128" y1="216" x2="128" y2="234"/>
+    <line x1="22" y1="128" x2="40" y2="128"/>
+    <line x1="216" y1="128" x2="234" y2="128"/>
+  </g>
+</svg>

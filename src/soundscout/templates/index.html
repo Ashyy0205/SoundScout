@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+
+  <!-- Mobile / PWA -->
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#00060E">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <title>SoundScout</title>
+
+  <!-- Favicons -->
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='soundscout_logo.svg') }}">
+  <link rel="icon" type="image/png" sizes="256x256" href="{{ url_for('static', filename='soundscout_logo.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='soundscout_logo.png') }}">
+
+  <!-- Main stylesheet -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+  <!-- Cyberpunk-style fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+
+  <!-- =========================
+       AUTH OVERLAY
+       ========================= -->
+  <div id="authOverlay" class="auth-overlay" style="display: none;">
+    <div class="auth-modal"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="authTitle">
+
+       <img class="auth-modal-logo"
+         src="{{ url_for('static', filename='soundscout_logo.svg') }}"
+           alt="SoundScout">
+      <h2 id="authTitle">Authentication Required</h2>
+      <p class="auth-subtitle">
+        VERIFIED PLEX USERS ONLY
+      </p>
+
+      <div class="auth-actions">
+        <button id="plexLoginBtn"
+                class="auth-primary-btn"
+                type="button">
+          Log in with Plex
+        </button>
+      </div>
+
+      <div id="authError"
+           class="auth-error"
+           style="display: none;"></div>
+    </div>
+  </div>
+
+  <!-- =========================
+       APP HEADER
+       ========================= -->
+  <header class="app-header">
+    <div class="app-header-brand">
+       <img class="brand-mark"
+         src="{{ url_for('static', filename='soundscout_logo.svg') }}"
+           alt="SoundScout logo"
+           aria-hidden="true">
+      <span class="app-header-title">SoundScout</span>
+    </div>
+    <div class="app-header-right">
+      <span id="authUserLabel" class="topbar-user-label" aria-hidden="true"></span>
+      <div id="authUserPill" class="user-pill" style="display: none;"></div>
+      <button id="runDiscoveryBtn"
+              class="nav-btn nav-btn-primary header-action-btn"
+              type="button"
+              style="display: none;">
+        Discover
+      </button>
+      <button id="logoutBtn"
+              class="nav-btn logout-btn header-action-btn"
+              type="button"
+              style="display: none;">
+        Log Out
+      </button>
+    </div>
+  </header>
+
+  <!-- =========================
+       APP SHELL
+       ========================= -->
+  <div class="container">
+    <div class="app-main">
+
+      <!-- TOPBAR (search — shown on Home tab only) -->
+      <div class="topbar">
+        <div class="topbar-controls">
+          <div class="search-section">
+            <div class="search-bar">
+
+              <input type="text"
+                     id="searchInput"
+                     placeholder="Search tracks, albums, or artists"
+                     autocomplete="off">
+
+              <select id="searchType"
+                      aria-label="Search type">
+                <option value="track">Tracks</option>
+                <option value="album">Albums</option>
+                <option value="artist">Artists</option>
+              </select>
+
+              <button id="searchBtn"
+                      type="button"
+                      onclick="performSearch()">
+                Scan
+              </button>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MAIN VIEW -->
+      <main class="main">
+
+        <div id="viewHeader"
+             class="view-header"
+             style="display: none;"></div>
+
+        <div id="loadingIndicator"
+             class="loading"
+             style="display: none;">
+          <div class="spinner"></div>
+          <p>Scanning signals…</p>
+        </div>
+
+        <div id="resultsContainer"
+             class="results-container"></div>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- =========================
+       ACTIVE DOWNLOADS PANEL
+       ========================= -->
+  <div id="sidebarDownloads"
+       class="active-jobs-panel"
+       style="display: none;">
+
+    <div class="sidebar-section-header">
+      <div class="sidebar-section-title">Active Jobs</div>
+      <div id="sidebarDownloadsSummary"
+           class="sidebar-section-meta"></div>
+    </div>
+
+    <div id="sidebarDownloadsList"
+         class="sidebar-downloads-list"></div>
+  </div>
+
+  <!-- =========================
+       PLAYER BAR
+       ========================= -->
+  <div id="playerBar"
+       class="playerbar"
+       aria-label="Preview player">
+
+    <div class="playerbar-left">
+      <div class="playerbar-art" aria-hidden="true"></div>
+
+      <div class="playerbar-meta">
+        <div id="playerTitle"
+             class="playerbar-title">
+          No signal locked
+        </div>
+
+        <div id="playerArtist"
+             class="playerbar-artist">
+          Select a track to preview
+        </div>
+      </div>
+    </div>
+
+    <div class="playerbar-center">
+      <button id="playerPlayBtn"
+              class="playerbar-control"
+              type="button"
+              aria-label="Play preview"
+              disabled></button>
+
+      <div class="playerbar-progress">
+        <div id="playerProgressFill"
+             class="playerbar-progress-fill"
+             style="width: 0%;"></div>
+      </div>
+    </div>
+
+    <div class="playerbar-right">
+      <div class="playerbar-badge">PREVIEW</div>
+    </div>
+  </div>
+
+  <!-- =========================
+       BOTTOM NAV
+       ========================= -->
+  <nav class="bottom-nav" aria-label="Navigation">
+
+    <!-- DESKTOP SIDEBAR ONLY: Brand -->
+    <div class="sidebar-brand desktop-sidebar-only">
+       <img src="{{ url_for('static', filename='soundscout_logo.svg') }}"
+           alt="" aria-hidden="true">
+      <span>SoundScout</span>
+    </div>
+
+    <button id="navSearchBtn" class="bottom-nav-item is-active" type="button">
+      <i data-lucide="home"></i>
+      <span>Home</span>
+    </button>
+    <button id="navLibraryBtn" class="bottom-nav-item" type="button">
+      <i data-lucide="library"></i>
+      <span>Library</span>
+    </button>
+    <button id="navDownloadsBtn" class="bottom-nav-item" type="button">
+      <i data-lucide="arrow-down-circle"></i>
+      <span>Downloads</span>
+    </button>
+    <button id="navImportBtn" class="bottom-nav-item" type="button">
+      <i data-lucide="plus-circle"></i>
+      <span>Import</span>
+    </button>
+    <button id="navSettingsBtn" class="bottom-nav-item" type="button">
+      <i data-lucide="settings"></i>
+      <span>Settings</span>
+    </button>
+
+    <!-- DESKTOP SIDEBAR ONLY: spacer pushes downloads+footer to bottom -->
+    <div class="desktop-sidebar-only" style="flex: 1; min-height: 0;"></div>
+
+    <!-- DESKTOP SIDEBAR ONLY: Active downloads section -->
+    <div id="sidebarDownloadsDesktop"
+         class="sidebar-downloads desktop-sidebar-only"
+         style="display: none;">
+      <div class="sidebar-section-header">
+        <div class="sidebar-section-title">Active Jobs</div>
+        <div id="sidebarDownloadsSummaryDesktop"
+             class="sidebar-section-meta"></div>
+      </div>
+      <div id="sidebarDownloadsListDesktop"
+           class="sidebar-downloads-list"></div>
+    </div>
+
+    <!-- DESKTOP SIDEBAR ONLY: User / action footer -->
+    <div class="sidebar-footer desktop-sidebar-only">
+      <span id="sidebarUserLabel" class="sidebar-user-label"></span>
+      <div class="sidebar-actions">
+        <button id="sidebarRunDiscoveryBtn"
+                class="nav-btn nav-btn-primary"
+                type="button"
+                style="display: none;">
+          Discover
+        </button>
+        <button id="sidebarLogoutBtn"
+                class="nav-btn logout-btn"
+                type="button"
+                style="display: none;">
+          Log Out
+        </button>
+      </div>
+    </div>
+
+  </nav>
+
+  <!-- =========================
+       SCRIPTS
+       ========================= -->
+  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+
+</body>
+</html>

@@ -1,0 +1,92 @@
+services:
+  soundscout:
+    image: ghcr.io/ashyy0205/soundscout:main
+    # To build locally from source instead:
+    # build: .
+    container_name: soundscout
+    restart: unless-stopped
+
+    environment:
+      # --- App Config ---
+      IS_DOCKER: "1"
+      OUTPUT_PATH: /music
+      DISCOVERY_ACQUIRE: ${DISCOVERY_ACQUIRE:-1}
+
+      # --- Scheduling ---
+      TZ: ${TZ:-Europe/London}
+      # Default schedule shown in the Web UI for per-user Auto Discovery.
+      # Format: min hour day month dow  (e.g. "0 5 * * 1" = every Monday at 5 AM)
+      CRON_SCHEDULE: ${CRON_SCHEDULE:-0 5 * * 1}
+      # Run discovery immediately on container start, then follow the schedule
+      RUN_ON_STARTUP: ${RUN_ON_STARTUP:-false}
+
+      # --- Web UI ---
+      ENABLE_WEBUI: ${ENABLE_WEBUI:-true}
+      WEBUI_PORT: ${WEBUI_PORT:-5000}
+      # Recommended: set a long random string to keep sessions valid across restarts
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-}
+      # Public URL for this container — required for Plex OAuth callbacks
+      # e.g. http://192.168.1.10:5000
+      WEBUI_PUBLIC_URL: ${WEBUI_PUBLIC_URL:-}
+      # Require Plex sign-in to access the Web UI API (recommended: 1)
+      WEBUI_REQUIRE_PLEX_LOGIN: ${WEBUI_REQUIRE_PLEX_LOGIN:-1}
+      # Set 0 to skip SSL verification for Plex connections with self-signed certificates
+      PLEX_VERIFY_SSL: ${PLEX_VERIFY_SSL:-1}
+
+      # --- Last.fm ---
+      # API key is bundled — no setup needed. Override only if you have your own key.
+      # LASTFM_API_KEY: ${LASTFM_API_KEY:-}
+      # Optional single-user fallback (preferred: each user links their account in Settings)
+      LASTFM_USERNAME: ${LASTFM_USERNAME:-}
+      # Tuning
+      LASTFM_MODE: ${LASTFM_MODE:-recommendations}
+      LASTFM_SEED_COUNT: ${LASTFM_SEED_COUNT:-25}
+      LASTFM_SIMILAR_PER_SEED: ${LASTFM_SIMILAR_PER_SEED:-5}
+
+      # --- Plex ---
+      PLEX_BASEURL: ${PLEX_BASEURL}
+      PLEX_MUSIC_LIBRARY: ${PLEX_MUSIC_LIBRARY:-Music}
+
+      # --- Playlist Options ---
+      PLAYLIST_NAME: ${PLAYLIST_NAME:-Discover Weekly}
+      MAX_TRACKS: ${MAX_TRACKS:-50}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+      # --- Safety / Reporting ---
+      DRY_RUN: ${DRY_RUN:-0}
+      REPORT_PATH: ${REPORT_PATH:-}
+
+      # --- Download Performance ---
+      # Simultaneous scraper processes (Python side)
+      DOWNLOAD_CONCURRENCY: ${DOWNLOAD_CONCURRENCY:-6}
+      # Goroutine workers inside a single scraper batch
+      SCRAPER_WORKERS: ${SCRAPER_WORKERS:-8}
+      # Parallel song.link URL resolver clients
+      SCRAPER_SONGLINK_WORKERS: ${SCRAPER_SONGLINK_WORKERS:-3}
+      # Persistent song.link resolved-URL cache (speeds up repeated runs)
+      SONGLINK_CACHE_PATH: ${SONGLINK_CACHE_PATH:-/config/songlink_cache.json}
+
+      # --- Optional Import Step ---
+      ENABLE_IMPORT: ${ENABLE_IMPORT:-0}
+      IMPORT_INBOX_DIR: ${IMPORT_INBOX_DIR:-/inbox}
+      IMPORT_CMD: ${IMPORT_CMD:-}
+
+    volumes:
+      # 1. Music library — where downloaded tracks are saved
+      # Unraid example: /mnt/user/Media/Music:/music
+      - /path/to/music:/music
+
+      # 2. Config — stores Plex tokens, per-user settings, session data
+      - /path/to/appdata/soundscout/config:/config
+
+      # 3. Data — download backlog, discovery reports
+      - /path/to/appdata/soundscout/data:/app/data
+
+      # 4. Scraper credentials — contains config.json with Tidal/Qobuz tokens
+      - /path/to/appdata/soundscout/scraper:/root/.scraper
+
+      # 5. (Optional) Inbox for Import Step
+      # - /path/to/inbox:/inbox:rw
+
+    ports:
+      - "${WEBUI_PORT:-5000}:5000"
