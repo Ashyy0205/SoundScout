@@ -2880,14 +2880,21 @@ async function downloadImportItems(tracks, playlistName, createPlexPlaylist, cov
 let _scoutMediaRecorder = null;
 let _scoutChunks = [];
 let _scoutStopping = false;
+let _scoutToken = null;
+
+// Global entry-point called by the button's onclick attribute.
+function scoutButtonTap() {
+    startScoutListen(_scoutToken);
+}
 
 function openScout() {
     if (authRequired && !authAuthed) return;
     const token = beginView('scout');
+    _scoutToken = token;
 
+    setLoading(false);
     const resultsContainer = document.getElementById('resultsContainer');
     if (resultsContainer) resultsContainer.innerHTML = '';
-    setResultsMode('list');
 
     const viewHeader = document.getElementById('viewHeader');
     if (viewHeader) {
@@ -2900,14 +2907,16 @@ function openScout() {
 }
 
 function _renderScoutIdle(token) {
-    if (!isActiveView('scout', token)) return;
+    _scoutToken = token;
     const rc = document.getElementById('resultsContainer');
     if (!rc) return;
 
     rc.innerHTML = `
         <div class="scout-stage" id="scoutStage">
           <div class="scout-ring" id="scoutRing">
-            <button class="scout-btn" id="scoutBtn" type="button" aria-label="Tap to identify song">
+            <button class="scout-btn" id="scoutBtn" type="button"
+                    aria-label="Tap to identify song"
+                    onclick="scoutButtonTap()">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
                 <path d="M9 9a3 3 0 1 1 6 0c0 1.5-.8 2.8-2 3.5V15"/>
                 <line x1="12" y1="19" x2="12" y2="19.01"/>
@@ -2918,17 +2927,9 @@ function _renderScoutIdle(token) {
           <div class="scout-label" id="scoutLabel">TAP TO IDENTIFY</div>
         </div>
     `;
-
-    // Re-render the Lucide icon manually — using inline SVG above for reliability
-    const btn = document.getElementById('scoutBtn');
-    if (btn) {
-        btn.addEventListener('click', () => startScoutListen(token));
-    }
 }
 
 async function startScoutListen(token) {
-    if (!isActiveView('scout', token)) return;
-
     const ringEl = document.getElementById('scoutRing');
     const btnEl = document.getElementById('scoutBtn');
     const labelEl = document.getElementById('scoutLabel');
