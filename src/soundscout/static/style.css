@@ -4014,9 +4014,19 @@ body.is-desktop-webui .mobile-nav-only {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 60vh;
-  gap: 24px;
+  min-height: calc(100dvh - 160px);
+  gap: 28px;
   padding: 24px 16px;
+}
+
+/* When Scout is active, switch the grid container to flex so the
+   stage fills and centres correctly instead of sitting top-left. */
+body.view-scout .results-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100dvh - 160px);
 }
 
 /* Mic-blocked guidance screen */
@@ -4070,8 +4080,8 @@ body.is-desktop-webui .mobile-nav-only {
 /* Outer ring — idle state */
 .scout-ring {
   position: relative;
-  width: 180px;
-  height: 180px;
+  width: 260px;
+  height: 260px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4105,8 +4115,8 @@ body.is-desktop-webui .mobile-nav-only {
 
 /* Main button */
 .scout-btn {
-  width: 140px;
-  height: 140px;
+  width: 210px;
+  height: 210px;
   border-radius: 50%;
   border: 2px solid rgba(2, 215, 242, 0.45);
   background: radial-gradient(circle at 35% 30%, rgba(2, 215, 242, 0.18), rgba(2, 215, 242, 0.06) 60%), rgba(7, 11, 18, 0.85);
@@ -4131,8 +4141,8 @@ body.is-desktop-webui .mobile-nav-only {
 }
 
 .scout-btn svg {
-  width: 56px;
-  height: 56px;
+  width: 80px;
+  height: 80px;
   stroke-width: 1.5;
 }
 
@@ -4153,7 +4163,7 @@ body.is-desktop-webui .mobile-nav-only {
 /* Label below the ring */
 .scout-label {
   font-family: var(--font-ui);
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -4300,16 +4310,16 @@ body.is-desktop-webui .mobile-nav-only {
 /* Mobile density */
 @media (max-width: 520px) {
   .scout-ring {
-    width: 156px;
-    height: 156px;
+    width: 230px;
+    height: 230px;
   }
   .scout-btn {
-    width: 120px;
-    height: 120px;
+    width: 185px;
+    height: 185px;
   }
   .scout-btn svg {
-    width: 46px;
-    height: 46px;
+    width: 70px;
+    height: 70px;
   }
   .scout-result-cover,
   .scout-result-cover-placeholder {
