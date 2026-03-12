@@ -4362,33 +4362,68 @@ body.view-scout .results-container {
 /* ── Action buttons ── */
 .scout-match-actions {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
   width: 100%;
-  margin-top: 8px;
+  margin-top: 16px;
   animation: scout-fade-up 0.4s 0.64s both;
 }
 
-.scout-match-actions .preview-btn,
-.scout-match-actions .nav-btn {
-  width: 100%;
+/* Shared circle button base */
+.scout-circle-btn {
+  display: flex;
+  align-items: center;
   justify-content: center;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.06);
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.scout-circle-btn:active { transform: scale(0.92); }
+.scout-circle-btn:hover  { border-color: rgba(255,255,255,0.4); background: rgba(255,255,255,0.12); }
+
+/* Small side buttons */
+.scout-circle-btn--sm {
+  width: 56px;
+  height: 56px;
+}
+.scout-circle-btn--sm svg {
+  width: 22px;
+  height: 22px;
 }
 
-.scout-again-link {
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-size: 0.82rem;
-  cursor: pointer;
-  padding: 4px 8px;
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-underline-offset: 3px;
-  margin-top: 2px;
-  animation: scout-fade-up 0.4s 0.72s both;
+/* Large centre play button */
+.scout-circle-btn--lg {
+  width: 76px;
+  height: 76px;
+  border-color: rgba(2, 215, 242, 0.55);
+  background: rgba(2, 215, 242, 0.12);
+  box-shadow: 0 0 28px rgba(2, 215, 242, 0.25);
 }
-.scout-again-link:hover { color: var(--text-primary); }
+.scout-circle-btn--lg svg {
+  width: 28px;
+  height: 28px;
+  /* nudge the play triangle optically centred */
+  transform: translateX(2px);
+}
+.scout-circle-btn--lg:hover {
+  border-color: rgba(2, 215, 242, 0.85);
+  background: rgba(2, 215, 242, 0.22);
+  box-shadow: 0 0 44px rgba(2, 215, 242, 0.35);
+}
+/* Pause state — turn yellow to match the listening colour */
+.scout-circle-btn--lg[data-state="pause"] {
+  border-color: rgba(255, 211, 0, 0.6);
+  background: rgba(255, 211, 0, 0.12);
+  box-shadow: 0 0 28px rgba(255, 211, 0, 0.25);
+}
+
+.scout-again-link { display: none; }
 
 /* ── Mobile density ── */
 @media (max-width: 520px) {
