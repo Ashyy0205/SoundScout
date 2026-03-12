@@ -3023,13 +3023,13 @@ async function startScoutListen(token) {
         };
     }
 
-    // Auto-stop after 7 seconds
+    // Auto-stop after 12 seconds — more audio improves recognition accuracy
     setTimeout(() => {
         if (_scoutMediaRecorder && _scoutMediaRecorder.state === 'recording' && !_scoutStopping) {
             _scoutStopping = true;
             _scoutMediaRecorder.stop();
         }
-    }, 7000);
+    }, 12000);
 }
 
 async function _submitScoutAudio(token, chunks, mimeType) {
@@ -3077,67 +3077,80 @@ async function _submitScoutAudio(token, chunks, mimeType) {
     }
 }
 
+// Module-level result data so onclick= attributes on the result card can
+// access it without fragile closures.
+let _scoutResultData = null;
+
+function scoutPreviewTap() {
+    if (!_scoutResultData) return;
+    const btn = document.getElementById('scoutPreviewBtn');
+    togglePreview(
+        _scoutResultData.artist || '',
+        _scoutResultData.title || '',
+        btn,
+        _scoutResultData.cover_url || ''
+    );
+}
+
+function scoutDownloadTap() {
+    if (!_scoutResultData) return;
+    const btn = document.getElementById('scoutDownloadBtn');
+    downloadItem(_scoutResultData.artist || '', _scoutResultData.title || '', 'track', btn);
+}
+
 function _renderScoutResult(token, data) {
     if (!isActiveView('scout', token)) return;
     const rc = document.getElementById('resultsContainer');
     if (!rc) return;
 
-    const title = escapeHtml(data.title || 'Unknown Title');
-    const artist = escapeHtml(data.artist || 'Unknown Artist');
-    const coverRaw = data.cover_url || '';
+    _scoutResultData = data;
 
-    const coverHtml = coverRaw
-        ? `<img class="scout-result-cover" src="${escapeHtml(coverRaw)}" alt="Album art" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-           <div class="scout-result-cover-placeholder" style="display:none">
-             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-           </div>`
-        : `<div class="scout-result-cover-placeholder">
-             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-           </div>`;
+    const title  = escapeHtml(data.title  || 'Unknown Title');
+    const artist = escapeHtml(data.artist || 'Unknown Artist');
+    const genre  = escapeHtml(data.genre  || '');
+    const coverRaw = data.cover_url || '';
+    const coverEsc = escapeHtml(coverRaw);
+
+    const bgStyle    = coverRaw ? ` style="background-image:url('${coverEsc}')"` : '';
+    const genrePill  = genre ? `<div class="scout-match-genre">${genre}</div>` : '';
+    const coverTag   = coverRaw
+        ? `<img class="scout-match-cover" src="${coverEsc}" alt="Album art"
+                onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+        : '';
 
     rc.innerHTML = `
-        <div class="scout-stage">
-          <div class="scout-result" id="scoutResult">
-            ${coverHtml}
-            <div class="scout-result-meta">
-              <div class="scout-result-title">${title}</div>
-              <div class="scout-result-artist">${artist}</div>
+        <div class="scout-match" id="scoutResult">
+          <div class="scout-match-bg"${bgStyle}></div>
+          <div class="scout-match-inner">
+            <div class="scout-match-cover-wrap">
+              ${coverTag}
+              <div class="scout-result-cover-placeholder"${coverRaw ? ' style="display:none"' : ''}>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+                </svg>
+              </div>
+              <div class="scout-match-scan"></div>
             </div>
-            <div class="scout-result-actions">
-              <button class="preview-btn" id="scoutPreviewBtn" type="button" aria-label="Preview"></button>
-              <button class="download-btn nav-btn-primary" id="scoutDownloadBtn" type="button">Download</button>
+            <div class="scout-match-badge">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              MATCH FOUND
             </div>
-            <button class="scout-again-btn nav-btn" id="scoutAgainBtn" type="button">Scan Again</button>
+            <div class="scout-match-title">${title}</div>
+            <div class="scout-match-artist">${artist}</div>
+            ${genrePill}
+            <div class="scout-match-actions">
+              <button class="preview-btn" id="scoutPreviewBtn" type="button"
+                      aria-label="Preview" onclick="scoutPreviewTap()"></button>
+              <button class="nav-btn nav-btn-primary" id="scoutDownloadBtn" type="button"
+                      onclick="scoutDownloadTap()">&#8681; Download</button>
+            </div>
+            <button class="scout-again-link" type="button" onclick="openScout()">&#8592; Scan Again</button>
           </div>
         </div>
     `;
-
-    const previewBtn = document.getElementById('scoutPreviewBtn');
-    const downloadBtn = document.getElementById('scoutDownloadBtn');
-    const againBtn = document.getElementById('scoutAgainBtn');
-
-    if (previewBtn) {
-        previewBtn.addEventListener('click', async () => {
-            await togglePreview(
-                data.artist || '',
-                data.title || '',
-                previewBtn,
-                coverRaw
-            );
-        });
-    }
-
-    if (downloadBtn) {
-        downloadBtn.addEventListener('click', () => {
-            downloadItem(data.artist || '', data.title || '', 'track', downloadBtn);
-        });
-    }
-
-    if (againBtn) {
-        againBtn.addEventListener('click', () => {
-            openScout();
-        });
-    }
 
     currentView = { kind: 'scout', state: { result: data } };
 }

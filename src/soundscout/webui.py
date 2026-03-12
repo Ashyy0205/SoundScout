@@ -4294,7 +4294,15 @@ def _convert_audio_to_wav(audio_bytes: bytes) -> bytes:
     output_path = input_path + '.wav'
     try:
         result = subprocess.run(
-            ['ffmpeg', '-y', '-i', input_path, '-ar', '16000', '-ac', '1', '-f', 'wav', output_path],
+            [
+                'ffmpeg', '-y', '-i', input_path,
+                '-ar', '44100', '-ac', '1',
+                # Loudness normalization — brings quiet/distant audio up to a
+                # consistent level before fingerprinting, which significantly
+                # improves recognition of low/normal volume sources.
+                '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+                '-f', 'wav', output_path,
+            ],
             capture_output=True,
             timeout=30,
         )
@@ -4365,11 +4373,22 @@ def shazam_identify():
         or ""
     )
 
+    # Genre and album from the sections metadata
+    genre = str((track.get("genres") or {}).get("primary") or "").strip()
+    album = ""
+    for section in (track.get("sections") or []):
+        if section.get("type") == "SONG":
+            for meta in (section.get("metadata") or []):
+                if str(meta.get("title") or "").lower() == "album":
+                    album = str(meta.get("text") or "").strip()
+
     return jsonify({
         "found": True,
         "title": title,
         "artist": artist,
         "cover_url": cover_url,
+        "album": album,
+        "genre": genre,
     })
 
 
