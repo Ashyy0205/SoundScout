@@ -2940,28 +2940,10 @@ async function startScoutListen(token) {
         return;
     }
 
-    // Pre-check permission state so we can set the right label and avoid a
-    // silent failure when the permission is already blocked.
-    let permState = 'prompt'; // safe default if Permissions API unavailable
-    if (navigator.permissions) {
-        try {
-            const perm = await navigator.permissions.query({ name: 'microphone' });
-            permState = perm.state;
-        } catch (_) { /* Permissions API not supported — proceed */ }
-    }
-
-    if (permState === 'denied') {
-        _renderScoutMicBlocked(token);
-        return;
-    }
-
-    // Disable button while requesting permission
+    // Disable button and show guidance — calling getUserMedia IS the OS permission
+    // prompt, so we tell the user to watch for it before we fire the request.
     if (btnEl) btnEl.disabled = true;
-    if (labelEl) {
-        // When permission hasn't been asked yet the browser is about to show
-        // its native dialog — tell the user to expect it.
-        labelEl.textContent = permState === 'prompt' ? 'TAP ALLOW WHEN PROMPTED…' : 'REQUESTING MIC…';
-    }
+    if (labelEl) { labelEl.textContent = 'TAP ALLOW ON THE POPUP…'; }
 
     let stream;
     try {
@@ -3201,6 +3183,46 @@ function _renderScoutMicBlocked(token) {
     const rc = document.getElementById('resultsContainer');
     if (!rc) return;
 
+    // Detect platform so we can show the right settings path.
+    const ua = navigator.userAgent || '';
+    const isIOS = /iPad|iPhone|iPod/i.test(ua) && !window.MSStream;
+    const isAndroid = /Android/i.test(ua);
+    const isPWA = window.matchMedia('(display-mode: standalone)').matches ||
+                  (window.navigator.standalone === true);
+
+    let steps;
+    if (isIOS && isPWA) {
+        steps = `
+            <li>Open your device <strong>Settings</strong></li>
+            <li>Scroll down and tap <strong>SoundScout</strong></li>
+            <li>Enable <strong>Microphone</strong></li>
+            <li>Return here and tap <strong>Try Again</strong></li>`;
+    } else if (isIOS) {
+        steps = `
+            <li>Open your device <strong>Settings</strong></li>
+            <li>Tap <strong>Privacy &amp; Security &rarr; Microphone</strong></li>
+            <li>Find your browser and switch it <strong>On</strong></li>
+            <li>Return here and tap <strong>Try Again</strong></li>`;
+    } else if (isAndroid && isPWA) {
+        steps = `
+            <li>Open your device <strong>Settings &rarr; Apps</strong></li>
+            <li>Find and tap <strong>SoundScout</strong></li>
+            <li>Tap <strong>Permissions &rarr; Microphone &rarr; Allow</strong></li>
+            <li>Return here and tap <strong>Try Again</strong></li>`;
+    } else if (isAndroid) {
+        steps = `
+            <li>Open your device <strong>Settings &rarr; Apps</strong></li>
+            <li>Tap <strong>Chrome</strong> (or your browser)</li>
+            <li>Tap <strong>Permissions &rarr; Microphone &rarr; Allow</strong></li>
+            <li>Return here and tap <strong>Try Again</strong></li>`;
+    } else {
+        steps = `
+            <li>Open your browser&apos;s <strong>Settings</strong></li>
+            <li>Go to <strong>Privacy / Site Settings &rarr; Microphone</strong></li>
+            <li>Allow this site to use the microphone</li>
+            <li>Refresh the page and tap <strong>Try Again</strong></li>`;
+    }
+
     rc.innerHTML = `
         <div class="scout-stage scout-stage--message">
           <div class="scout-mic-blocked">
@@ -3218,14 +3240,10 @@ function _renderScoutMicBlocked(token) {
             </div>
             <p class="scout-mic-blocked__title">Microphone Blocked</p>
             <p class="scout-mic-blocked__body">
-              Scout needs your microphone to identify songs.
-              Your browser has blocked access for this page.
+              Scout needs microphone access to identify songs.
+              Enable it in your device settings:
             </p>
-            <ol class="scout-mic-blocked__steps">
-              <li>Tap the <strong>lock&nbsp;/ info icon</strong> in your browser&apos;s address bar</li>
-              <li>Find <strong>Microphone</strong> and set it to <strong>Allow</strong></li>
-              <li>Reload the page, then try again</li>
-            </ol>
+            <ol class="scout-mic-blocked__steps">${steps}</ol>
           </div>
           <button class="nav-btn nav-btn-primary" type="button" onclick="openScout()">Try Again</button>
         </div>
