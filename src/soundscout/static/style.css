@@ -4019,6 +4019,54 @@ body.is-desktop-webui .mobile-nav-only {
   padding: 24px 16px;
 }
 
+/* Mic-blocked guidance screen */
+.scout-stage--message {
+  justify-content: flex-start;
+  padding-top: 32px;
+}
+.scout-mic-blocked {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 320px;
+  text-align: center;
+}
+.scout-mic-blocked__icon {
+  width: 56px;
+  height: 56px;
+  color: var(--accent-scan, #00e5ff);
+  opacity: 0.85;
+}
+.scout-mic-blocked__icon svg {
+  width: 100%;
+  height: 100%;
+}
+.scout-mic-blocked__title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-primary, #fff);
+  margin: 0;
+}
+.scout-mic-blocked__body {
+  font-size: 0.85rem;
+  color: var(--text-secondary, rgba(255,255,255,.6));
+  margin: 0;
+  line-height: 1.5;
+}
+.scout-mic-blocked__steps {
+  text-align: left;
+  font-size: 0.82rem;
+  color: var(--text-secondary, rgba(255,255,255,.6));
+  padding-left: 20px;
+  margin: 4px 0 0;
+  line-height: 1.7;
+}
+.scout-mic-blocked__steps strong {
+  color: var(--text-primary, #fff);
+}
+
 /* Outer ring — idle state */
 .scout-ring {
   position: relative;

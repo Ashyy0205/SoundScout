@@ -2940,15 +2940,43 @@ async function startScoutListen(token) {
         return;
     }
 
-    // Disable button while getting mic permission
+    // Pre-check permission state so we can set the right label and avoid a
+    // silent failure when the permission is already blocked.
+    let permState = 'prompt'; // safe default if Permissions API unavailable
+    if (navigator.permissions) {
+        try {
+            const perm = await navigator.permissions.query({ name: 'microphone' });
+            permState = perm.state;
+        } catch (_) { /* Permissions API not supported — proceed */ }
+    }
+
+    if (permState === 'denied') {
+        _renderScoutMicBlocked(token);
+        return;
+    }
+
+    // Disable button while requesting permission
     if (btnEl) btnEl.disabled = true;
-    if (labelEl) { labelEl.textContent = 'REQUESTING MIC…'; }
+    if (labelEl) {
+        // When permission hasn't been asked yet the browser is about to show
+        // its native dialog — tell the user to expect it.
+        labelEl.textContent = permState === 'prompt' ? 'TAP ALLOW WHEN PROMPTED…' : 'REQUESTING MIC…';
+    }
 
     let stream;
     try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (e) {
-        _renderScoutError(token, 'Microphone access denied. Allow microphone permission and try again.');
+        if (btnEl) btnEl.disabled = false;
+        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+            _renderScoutMicBlocked(token);
+        } else if (e.name === 'NotFoundError') {
+            _renderScoutError(token, 'No microphone found on this device.');
+        } else if (e.name === 'SecurityError') {
+            _renderScoutError(token, 'A secure (HTTPS) connection is required to access the microphone.');
+        } else {
+            _renderScoutError(token, 'Could not access microphone: ' + e.name);
+        }
         return;
     }
 
@@ -3163,6 +3191,43 @@ function _renderScoutError(token, message) {
         <div class="scout-stage">
           <div class="scout-label is-error">${escapeHtml(String(message || 'Something went wrong'))}</div>
           <button class="nav-btn nav-btn-primary" type="button" onclick="openScout()" style="margin-top:8px;">Try Again</button>
+        </div>
+    `;
+    currentView = { kind: 'scout', state: null };
+}
+
+function _renderScoutMicBlocked(token) {
+    if (!isActiveView('scout', token)) return;
+    const rc = document.getElementById('resultsContainer');
+    if (!rc) return;
+
+    rc.innerHTML = `
+        <div class="scout-stage scout-stage--message">
+          <div class="scout-mic-blocked">
+            <div class="scout-mic-blocked__icon">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="2" y1="2" x2="22" y2="22"/>
+                <path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/>
+                <path d="M5 10v2a7 7 0 0 0 12 5"/>
+                <path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/>
+                <path d="M9 9v3a3 3 0 0 0 5.12 2.12"/>
+                <line x1="12" y1="19" x2="12" y2="22"/>
+                <line x1="8" y1="22" x2="16" y2="22"/>
+              </svg>
+            </div>
+            <p class="scout-mic-blocked__title">Microphone Blocked</p>
+            <p class="scout-mic-blocked__body">
+              Scout needs your microphone to identify songs.
+              Your browser has blocked access for this page.
+            </p>
+            <ol class="scout-mic-blocked__steps">
+              <li>Tap the <strong>lock&nbsp;/ info icon</strong> in your browser&apos;s address bar</li>
+              <li>Find <strong>Microphone</strong> and set it to <strong>Allow</strong></li>
+              <li>Reload the page, then try again</li>
+            </ol>
+          </div>
+          <button class="nav-btn nav-btn-primary" type="button" onclick="openScout()">Try Again</button>
         </div>
     `;
     currentView = { kind: 'scout', state: null };
