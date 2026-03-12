@@ -12,7 +12,7 @@
   <title>SoundScout</title>
 
   <!-- Favicons -->
-  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='soundscout_logo.svg') }}">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='soundscoutr_logo.svg') }}">
   <link rel="icon" type="image/png" sizes="256x256" href="{{ url_for('static', filename='soundscout_logo.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='soundscout_logo.png') }}">
 
@@ -36,8 +36,8 @@
          aria-modal="true"
          aria-labelledby="authTitle">
 
-       <img class="auth-modal-logo"
-         src="{{ url_for('static', filename='soundscout_logo.svg') }}"
+      <img class="auth-modal-logo"
+           src="{{ url_for('static', filename='soundscoutr_logo.svg') }}"
            alt="SoundScout">
       <h2 id="authTitle">Authentication Required</h2>
       <p class="auth-subtitle">
@@ -63,8 +63,8 @@
        ========================= -->
   <header class="app-header">
     <div class="app-header-brand">
-       <img class="brand-mark"
-         src="{{ url_for('static', filename='soundscout_logo.svg') }}"
+      <img class="brand-mark"
+           src="{{ url_for('static', filename='soundscoutr_logo.svg') }}"
            alt="SoundScout logo"
            aria-hidden="true">
       <span class="app-header-title">SoundScout</span>
@@ -209,7 +209,7 @@
 
     <!-- DESKTOP SIDEBAR ONLY: Brand -->
     <div class="sidebar-brand desktop-sidebar-only">
-       <img src="{{ url_for('static', filename='soundscout_logo.svg') }}"
+      <img src="{{ url_for('static', filename='soundscoutr_logo.svg') }}"
            alt="" aria-hidden="true">
       <span>SoundScout</span>
     </div>
@@ -221,6 +221,10 @@
     <button id="navLibraryBtn" class="bottom-nav-item" type="button">
       <i data-lucide="library"></i>
       <span>Library</span>
+    </button>
+    <button id="navShazamBtn" class="bottom-nav-item mobile-nav-only" type="button">
+      <i data-lucide="scan-line"></i>
+      <span>Scout</span>
     </button>
     <button id="navDownloadsBtn" class="bottom-nav-item" type="button">
       <i data-lucide="arrow-down-circle"></i>

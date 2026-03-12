@@ -89,6 +89,7 @@ let navLibraryBtn = null;
 let navDownloadsBtn = null;
 let navSettingsBtn = null;
 let navImportBtn = null;
+let navShazamBtn = null;
 
 let previewAudio = null;
 let currentPreviewKey = null;
@@ -302,6 +303,16 @@ document.addEventListener('DOMContentLoaded', () => {
             viewStack = [];
             setActiveNav('import');
             openImport();
+        });
+    }
+
+    navShazamBtn = document.getElementById('navShazamBtn');
+    if (navShazamBtn && !navShazamBtn.dataset.bound) {
+        navShazamBtn.dataset.bound = '1';
+        navShazamBtn.addEventListener('click', () => {
+            viewStack = [];
+            setActiveNav('scout');
+            openScout();
         });
     }
 });
@@ -1100,6 +1111,7 @@ function setActiveNav(which) {
     if (navDownloadsBtn) navDownloadsBtn.classList.toggle('is-active', w === 'downloads');
     if (navSettingsBtn) navSettingsBtn.classList.toggle('is-active', w === 'settings');
     if (navImportBtn) navImportBtn.classList.toggle('is-active', w === 'import');
+    if (navShazamBtn) navShazamBtn.classList.toggle('is-active', w === 'scout');
     updateTopbarVisibility();
 }
 
@@ -1840,10 +1852,14 @@ async function openArtist(artistName) {
 
     const resultsContainer = document.getElementById('resultsContainer');
     resultsContainer.innerHTML = '';
-    setViewHeader(renderArtistHeader({
-        artist: artistName,
-        monitor: { monitored: false, busy: false }
-    }));
+    const downloadLabel = isMobileWebUi() ? 'Download' : 'Download Top Tracks';
+    setViewHeader(`
+        <button class="nav-btn" onclick="goBack()">← Back</button>
+        <div class="view-title">${escapeHtml(artistName)}</div>
+        <div class="view-actions">
+            <button class="nav-btn" onclick="downloadItem('${escapeJsString(artistName)}', '${escapeJsString(artistName)}', 'artist', this)">${downloadLabel}</button>
+        </div>
+    `);
     setLoading(true, 'Loading artist…');
 
     try {
@@ -1852,7 +1868,6 @@ async function openArtist(artistName) {
             apiFetchJson(`/api/artist/top_tracks?artist=${encodeURIComponent(artistName)}&limit=10`),
             apiFetchJson(`/api/artist/new_release?artist=${encodeURIComponent(artistName)}&album_limit=10`),
         ]);
-        const monitorData = await apiFetchJson(`/api/artist/monitor/status?artist=${encodeURIComponent(artistName)}`).catch(() => ({ monitored: false }));
         if (!isActiveView('artist', token)) return;
         setLoading(false);
 
@@ -1865,18 +1880,7 @@ async function openArtist(artistName) {
             items: newData.items || []
         } : null;
 
-        renderArtistView({
-            artist: artistName,
-            popular_items: popular,
-            new_release: newRelease,
-            items: albums,
-            monitor: {
-                monitored: !!monitorData.monitored,
-                busy: false,
-                last_seen_release_name: monitorData.last_seen_release_name || '',
-                last_error: monitorData.last_error || ''
-            }
-        });
+        renderArtistView({ artist: artistName, popular_items: popular, new_release: newRelease, items: albums });
     } catch (e) {
         if (!isActiveView('artist', token)) return;
         setLoading(false);
@@ -1885,70 +1889,17 @@ async function openArtist(artistName) {
     }
 }
 
-function renderArtistHeader(state) {
+function renderArtistView(state) {
+    currentView = { kind: 'artist', state };
+    setResultsMode('list');
     const downloadLabel = isMobileWebUi() ? 'Download' : 'Download Top Tracks';
-    const monitorState = state && state.monitor ? state.monitor : {};
-    const monitorBusy = !!monitorState.busy;
-    const monitorLabel = monitorBusy ? 'Saving…' : (monitorState.monitored ? 'Monitored' : 'Monitor');
-    const monitorClasses = monitorState.monitored
-        ? 'nav-btn nav-btn-primary artist-monitor-btn is-monitored'
-        : 'nav-btn nav-btn-secondary artist-monitor-btn';
-    const disabledAttr = monitorBusy ? 'disabled' : '';
-
-    return `
+    setViewHeader(`
         <button class="nav-btn" onclick="goBack()">← Back</button>
         <div class="view-title">${escapeHtml(state.artist)}</div>
         <div class="view-actions">
             <button class="nav-btn" onclick="downloadItem('${escapeJsString(state.artist)}', '${escapeJsString(state.artist)}', 'artist', this)">${downloadLabel}</button>
-            <button class="${monitorClasses}" onclick="toggleArtistMonitor('${escapeJsString(state.artist)}', this)" ${disabledAttr}>${monitorLabel}</button>
         </div>
-    `;
-}
-
-async function toggleArtistMonitor(artistName, buttonElement) {
-    if (!currentView || currentView.kind !== 'artist' || !currentView.state || currentView.state.artist !== artistName) {
-        return;
-    }
-
-    const currentMonitor = currentView.state.monitor || { monitored: false, busy: false };
-    const nextMonitored = !currentMonitor.monitored;
-    currentView.state.monitor = { ...currentMonitor, busy: true };
-    setViewHeader(renderArtistHeader(currentView.state));
-
-    try {
-        const result = await apiFetchJson('/api/artist/monitor/toggle', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ artist: artistName, monitored: nextMonitored })
-        });
-
-        if (!currentView || currentView.kind !== 'artist' || !currentView.state || currentView.state.artist !== artistName) {
-            return;
-        }
-
-        currentView.state.monitor = {
-            monitored: !!result.monitored,
-            busy: false,
-            last_seen_release_name: result.last_seen_release_name || '',
-            last_error: ''
-        };
-        setViewHeader(renderArtistHeader(currentView.state));
-    } catch (error) {
-        console.error('Artist monitor toggle error:', error);
-        if (!currentView || currentView.kind !== 'artist' || !currentView.state || currentView.state.artist !== artistName) {
-            return;
-        }
-        currentView.state.monitor = { ...currentMonitor, busy: false };
-        setViewHeader(renderArtistHeader(currentView.state));
-    }
-}
-
-function renderArtistView(state) {
-    currentView = { kind: 'artist', state };
-    setResultsMode('list');
-    setViewHeader(renderArtistHeader(state));
+    `);
 
     const resultsContainer = document.getElementById('resultsContainer');
     if (!resultsContainer) return;
@@ -2923,4 +2874,297 @@ async function downloadImportItems(tracks, playlistName, createPlexPlaylist, cov
         if (dlBtn) { dlBtn.disabled = false; dlBtn.textContent = 'Download'; }
     }
 }
+
+// ── Scout (Shazam-like track identification) ─────────────────────────────────
+
+let _scoutMediaRecorder = null;
+let _scoutChunks = [];
+let _scoutStopping = false;
+
+function openScout() {
+    if (authRequired && !authAuthed) return;
+    const token = beginView('scout');
+
+    const resultsContainer = document.getElementById('resultsContainer');
+    if (resultsContainer) resultsContainer.innerHTML = '';
+    setResultsMode('list');
+
+    const viewHeader = document.getElementById('viewHeader');
+    if (viewHeader) {
+        viewHeader.style.display = 'none';
+        viewHeader.innerHTML = '';
+    }
+
+    _renderScoutIdle(token);
+    currentView = { kind: 'scout', state: null };
+}
+
+function _renderScoutIdle(token) {
+    if (!isActiveView('scout', token)) return;
+    const rc = document.getElementById('resultsContainer');
+    if (!rc) return;
+
+    rc.innerHTML = `
+        <div class="scout-stage" id="scoutStage">
+          <div class="scout-ring" id="scoutRing">
+            <button class="scout-btn" id="scoutBtn" type="button" aria-label="Tap to identify song">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                <path d="M9 9a3 3 0 1 1 6 0c0 1.5-.8 2.8-2 3.5V15"/>
+                <line x1="12" y1="19" x2="12" y2="19.01"/>
+                <circle cx="12" cy="12" r="10"/>
+              </svg>
+            </button>
+          </div>
+          <div class="scout-label" id="scoutLabel">TAP TO IDENTIFY</div>
+        </div>
+    `;
+
+    // Re-render the Lucide icon manually — using inline SVG above for reliability
+    const btn = document.getElementById('scoutBtn');
+    if (btn) {
+        btn.addEventListener('click', () => startScoutListen(token));
+    }
+}
+
+async function startScoutListen(token) {
+    if (!isActiveView('scout', token)) return;
+
+    const ringEl = document.getElementById('scoutRing');
+    const btnEl = document.getElementById('scoutBtn');
+    const labelEl = document.getElementById('scoutLabel');
+
+    // Check MediaRecorder support
+    if (!window.MediaRecorder || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        _renderScoutError(token, 'Microphone access is not supported in this browser.');
+        return;
+    }
+
+    // Disable button while getting mic permission
+    if (btnEl) btnEl.disabled = true;
+    if (labelEl) { labelEl.textContent = 'REQUESTING MIC…'; }
+
+    let stream;
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (e) {
+        _renderScoutError(token, 'Microphone access denied. Allow microphone permission and try again.');
+        return;
+    }
+
+    if (!isActiveView('scout', token)) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+    }
+
+    // Transition to listening state
+    if (ringEl) ringEl.classList.add('is-listening');
+    if (btnEl) {
+        btnEl.classList.add('is-listening');
+        btnEl.disabled = false;
+        btnEl.setAttribute('aria-label', 'Stop listening');
+    }
+    if (labelEl) { labelEl.textContent = 'LISTENING…'; labelEl.className = 'scout-label is-listening'; }
+
+    // Show progress dots
+    const stage = document.getElementById('scoutStage');
+    if (stage) {
+        const dots = document.createElement('div');
+        dots.className = 'scout-dots';
+        dots.innerHTML = '<span class="scout-dot"></span><span class="scout-dot"></span><span class="scout-dot"></span>';
+        stage.appendChild(dots);
+    }
+
+    _scoutChunks = [];
+    _scoutStopping = false;
+
+    // Choose a supported MIME type
+    const mimeType = (['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg', ''])
+        .find(m => !m || MediaRecorder.isTypeSupported(m)) || '';
+    const recOpts = mimeType ? { mimeType } : {};
+
+    try {
+        _scoutMediaRecorder = new MediaRecorder(stream, recOpts);
+    } catch (e) {
+        stream.getTracks().forEach(t => t.stop());
+        _renderScoutError(token, 'Could not start recording: ' + String(e));
+        return;
+    }
+
+    _scoutMediaRecorder.addEventListener('dataavailable', (e) => {
+        if (e.data && e.data.size > 0) _scoutChunks.push(e.data);
+    });
+
+    _scoutMediaRecorder.addEventListener('stop', async () => {
+        stream.getTracks().forEach(t => t.stop());
+        if (!isActiveView('scout', token)) return;
+        await _submitScoutAudio(token, _scoutChunks, mimeType || 'audio/webm');
+    });
+
+    _scoutMediaRecorder.start(250); // collect 250 ms chunks
+
+    // Allow user to stop early by tapping the button again
+    if (btnEl) {
+        btnEl.onclick = () => {
+            if (_scoutMediaRecorder && _scoutMediaRecorder.state === 'recording') {
+                _scoutStopping = true;
+                _scoutMediaRecorder.stop();
+            }
+        };
+    }
+
+    // Auto-stop after 7 seconds
+    setTimeout(() => {
+        if (_scoutMediaRecorder && _scoutMediaRecorder.state === 'recording' && !_scoutStopping) {
+            _scoutStopping = true;
+            _scoutMediaRecorder.stop();
+        }
+    }, 7000);
+}
+
+async function _submitScoutAudio(token, chunks, mimeType) {
+    if (!isActiveView('scout', token)) return;
+
+    const ringEl = document.getElementById('scoutRing');
+    const btnEl = document.getElementById('scoutBtn');
+    const labelEl = document.getElementById('scoutLabel');
+
+    if (ringEl) ringEl.classList.remove('is-listening');
+    if (btnEl) { btnEl.classList.remove('is-listening'); btnEl.disabled = true; }
+    if (labelEl) { labelEl.textContent = 'IDENTIFYING…'; labelEl.className = 'scout-label'; }
+
+    if (!chunks || chunks.length === 0) {
+        _renderScoutError(token, 'No audio captured. Try again.');
+        return;
+    }
+
+    const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+    const formData = new FormData();
+    formData.append('audio', blob, 'recording.webm');
+
+    try {
+        const resp = await fetch('/api/shazam', { method: 'POST', body: formData });
+        if (!isActiveView('scout', token)) return;
+
+        const data = await resp.json();
+        if (!isActiveView('scout', token)) return;
+
+        if (!resp.ok || data.error) {
+            _renderScoutError(token, data.error || 'Recognition failed. Try again.');
+            return;
+        }
+
+        if (!data.found) {
+            _renderScoutNotFound(token);
+            return;
+        }
+
+        _renderScoutResult(token, data);
+
+    } catch (e) {
+        if (!isActiveView('scout', token)) return;
+        _renderScoutError(token, 'Connection error. Check your network and try again.');
+    }
+}
+
+function _renderScoutResult(token, data) {
+    if (!isActiveView('scout', token)) return;
+    const rc = document.getElementById('resultsContainer');
+    if (!rc) return;
+
+    const title = escapeHtml(data.title || 'Unknown Title');
+    const artist = escapeHtml(data.artist || 'Unknown Artist');
+    const coverRaw = data.cover_url || '';
+
+    const coverHtml = coverRaw
+        ? `<img class="scout-result-cover" src="${escapeHtml(coverRaw)}" alt="Album art" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+           <div class="scout-result-cover-placeholder" style="display:none">
+             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+           </div>`
+        : `<div class="scout-result-cover-placeholder">
+             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+           </div>`;
+
+    rc.innerHTML = `
+        <div class="scout-stage">
+          <div class="scout-result" id="scoutResult">
+            ${coverHtml}
+            <div class="scout-result-meta">
+              <div class="scout-result-title">${title}</div>
+              <div class="scout-result-artist">${artist}</div>
+            </div>
+            <div class="scout-result-actions">
+              <button class="preview-btn" id="scoutPreviewBtn" type="button" aria-label="Preview"></button>
+              <button class="download-btn nav-btn-primary" id="scoutDownloadBtn" type="button">Download</button>
+            </div>
+            <button class="scout-again-btn nav-btn" id="scoutAgainBtn" type="button">Scan Again</button>
+          </div>
+        </div>
+    `;
+
+    const previewBtn = document.getElementById('scoutPreviewBtn');
+    const downloadBtn = document.getElementById('scoutDownloadBtn');
+    const againBtn = document.getElementById('scoutAgainBtn');
+
+    if (previewBtn) {
+        previewBtn.addEventListener('click', async () => {
+            await togglePreview(
+                data.artist || '',
+                data.title || '',
+                previewBtn,
+                coverRaw
+            );
+        });
+    }
+
+    if (downloadBtn) {
+        downloadBtn.addEventListener('click', () => {
+            downloadItem(data.artist || '', data.title || '', 'track', downloadBtn);
+        });
+    }
+
+    if (againBtn) {
+        againBtn.addEventListener('click', () => {
+            openScout();
+        });
+    }
+
+    currentView = { kind: 'scout', state: { result: data } };
+}
+
+function _renderScoutNotFound(token) {
+    if (!isActiveView('scout', token)) return;
+    const rc = document.getElementById('resultsContainer');
+    if (!rc) return;
+
+    rc.innerHTML = `
+        <div class="scout-stage">
+          <div class="scout-ring">
+            <button class="scout-btn" type="button" aria-label="Try again" style="border-color:rgba(255,42,42,0.55);color:var(--state-error);background:radial-gradient(circle at 35% 30%,rgba(255,42,42,0.14),rgba(255,42,42,0.04) 60%),rgba(7,11,18,0.85);">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+            </button>
+          </div>
+          <div class="scout-label is-error">NOT RECOGNISED</div>
+          <div style="font-size:0.82rem;color:var(--muted);text-align:center;">Make sure music is playing nearby and try again.</div>
+          <button class="nav-btn nav-btn-primary" type="button" onclick="openScout()" style="margin-top:8px;">Try Again</button>
+        </div>
+    `;
+    currentView = { kind: 'scout', state: null };
+}
+
+function _renderScoutError(token, message) {
+    if (!isActiveView('scout', token)) return;
+    const rc = document.getElementById('resultsContainer');
+    if (!rc) return;
+
+    rc.innerHTML = `
+        <div class="scout-stage">
+          <div class="scout-label is-error">${escapeHtml(String(message || 'Something went wrong'))}</div>
+          <button class="nav-btn nav-btn-primary" type="button" onclick="openScout()" style="margin-top:8px;">Try Again</button>
+        </div>
+    `;
+    currentView = { kind: 'scout', state: null };
+}
+
 

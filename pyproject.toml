@@ -13,7 +13,8 @@ dependencies = [
     "pydantic-settings>=2.2",
     "APScheduler>=3.10",
     "flask>=3.0",
-    "flask-cors>=4.0"
+    "flask-cors>=4.0",
+    "shazamio>=0.4.0",
 ]
 
 [project.scripts]

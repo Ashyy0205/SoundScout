@@ -54,6 +54,7 @@ app.config.update(
 SCRAPER_BIN = os.environ.get("SCRAPER_BIN", "scraper")
 MUSIC_LIBRARY_PATH = Path(os.environ.get("OUTPUT_PATH", "/music"))
 PLEX_MUSIC_LIBRARY = (os.environ.get("PLEX_MUSIC_LIBRARY") or "Music").strip() or "Music"
+SERVICE = os.environ.get("SCRAPER_SERVICE", "tidal")
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY", "5c9d9b9e8b5b545d516079408ef2a07c")
 LASTFM_USERNAME = os.environ.get("LASTFM_USERNAME", "")
 WEBUI_PUBLIC_URL = (os.environ.get("WEBUI_PUBLIC_URL") or "").rstrip("/")
@@ -137,26 +138,6 @@ _user_store_lock = threading.Lock()
 _HISTORY_PATH = _webui_data_dir() / "download_history.json"
 _history_lock = threading.Lock()
 _HISTORY_MAX_ENTRIES = 500
-
-try:
-    ARTIST_MONITOR_INTERVAL_S = max(
-        300,
-        int(float((os.environ.get("ARTIST_MONITOR_INTERVAL_MINUTES") or "60").strip()) * 60),
-    )
-except Exception:
-    ARTIST_MONITOR_INTERVAL_S = 3600
-
-try:
-    ARTIST_MONITOR_RELEASE_SCAN_LIMIT = max(
-        1,
-        min(12, int((os.environ.get("ARTIST_MONITOR_RELEASE_SCAN_LIMIT") or "6").strip())),
-    )
-except Exception:
-    ARTIST_MONITOR_RELEASE_SCAN_LIMIT = 6
-
-_ARTIST_MONITOR_MAX_SEEN_RELEASES = 25
-_ARTIST_MONITOR_RETRY_FAILURE_LIMIT = 3
-_ARTIST_MONITOR_RETRY_COOLDOWN_S = 7 * 24 * 60 * 60
 
 
 def _parse_default_autodiscovery_from_cron() -> tuple[int, str]:
@@ -307,257 +288,6 @@ def _save_user_store(data: dict) -> None:
     tmp = _USER_STORE_PATH.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     tmp.replace(_USER_STORE_PATH)
-
-
-def _normalize_monitor_artist_name(artist: str) -> str:
-    return re.sub(r"\s+", " ", str(artist or "").strip())
-
-
-def _monitored_artist_key(artist: str) -> str:
-    return _norm_artist(_normalize_monitor_artist_name(artist))
-
-
-def _clean_seen_release_keys(values: object) -> list[str]:
-    seen: list[str] = []
-    if not isinstance(values, list):
-        return seen
-    for value in values:
-        key = str(value or "").strip()
-        if key and key not in seen:
-            seen.append(key)
-        if len(seen) >= _ARTIST_MONITOR_MAX_SEEN_RELEASES:
-            break
-    return seen
-
-
-def _clean_release_retry_state(values: object) -> dict[str, dict[str, int | str]]:
-    cleaned: dict[str, dict[str, int | str]] = {}
-    if not isinstance(values, dict):
-        return cleaned
-    for release_key, raw in values.items():
-        key = str(release_key or "").strip()
-        if not key or not isinstance(raw, dict):
-            continue
-        try:
-            consecutive_failures = max(0, int(raw.get("consecutive_failures") or 0))
-        except Exception:
-            consecutive_failures = 0
-        try:
-            cooldown_until = max(0, int(raw.get("cooldown_until") or 0))
-        except Exception:
-            cooldown_until = 0
-        try:
-            last_attempted_at = max(0, int(raw.get("last_attempted_at") or 0))
-        except Exception:
-            last_attempted_at = 0
-        cleaned[key] = {
-            "consecutive_failures": consecutive_failures,
-            "cooldown_until": cooldown_until,
-            "last_attempted_at": last_attempted_at,
-            "last_status": str(raw.get("last_status") or "").strip(),
-        }
-    return cleaned
-
-
-def _clean_monitored_artist_entry(entry: object) -> dict | None:
-    if not isinstance(entry, dict):
-        return None
-
-    artist = _normalize_monitor_artist_name(entry.get("artist") or "")
-    if not artist:
-        return None
-
-    return {
-        "artist": artist,
-        "artist_key": _monitored_artist_key(artist),
-        "enabled_at": int(entry.get("enabled_at") or time.time()),
-        "last_checked_at": int(entry.get("last_checked_at") or 0),
-        "last_error": str(entry.get("last_error") or "").strip(),
-        "last_seen_release_key": str(entry.get("last_seen_release_key") or "").strip(),
-        "last_seen_release_name": str(entry.get("last_seen_release_name") or "").strip(),
-        "last_seen_release_ts": int(entry.get("last_seen_release_ts") or 0),
-        "seen_release_keys": _clean_seen_release_keys(entry.get("seen_release_keys") or []),
-        "release_retry_state": _clean_release_retry_state(entry.get("release_retry_state") or {}),
-    }
-
-
-def _clean_monitored_artist_list(values: object) -> list[dict]:
-    out: list[dict] = []
-    seen_keys: set[str] = set()
-    if not isinstance(values, list):
-        return out
-    for raw in values:
-        cleaned = _clean_monitored_artist_entry(raw)
-        if not cleaned:
-            continue
-        artist_key = cleaned["artist_key"]
-        if artist_key in seen_keys:
-            continue
-        seen_keys.add(artist_key)
-        out.append(cleaned)
-    out.sort(key=lambda item: (int(item.get("enabled_at") or 0), item.get("artist", "").lower()))
-    return out
-
-
-def _artist_release_sort_key(info: dict) -> tuple[int, str]:
-    try:
-        published_ts = int(info.get("published_ts") or 0)
-    except Exception:
-        published_ts = 0
-    return (published_ts, _norm_text(info.get("album") or ""))
-
-
-def _artist_release_key(info: dict) -> str:
-    artist = _normalize_monitor_artist_name(info.get("artist") or "")
-    album = str(info.get("album") or "").strip()
-    if not artist or not album:
-        return ""
-    try:
-        published_ts = int(info.get("published_ts") or 0)
-    except Exception:
-        published_ts = 0
-    return f"{_monitored_artist_key(artist)}|||{_norm_text(album)}|||{published_ts}"
-
-
-def _get_artist_release_candidates(artist: str, album_limit: int) -> list[dict]:
-    artist_name = _normalize_monitor_artist_name(artist)
-    if not artist_name or not LASTFM_API_KEY:
-        return []
-
-    limit = max(1, min(int(album_limit or 1), 15))
-    lastfm = LastFmClient(api_key=LASTFM_API_KEY, username=LASTFM_USERNAME)
-    albums = lastfm.get_artist_albums(artist_name, limit=limit) or []
-    if not albums:
-        return []
-
-    names: list[str] = []
-    for album in albums:
-        name = str(album.get("name") or "").strip()
-        if not name or name in names:
-            continue
-        names.append(name)
-        if len(names) >= limit:
-            break
-    if not names:
-        return []
-
-    infos: list[dict] = []
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(names))) as ex:
-            futures = [ex.submit(lastfm.get_album_tracks_detailed, artist_name, name) for name in names]
-            for fut in concurrent.futures.as_completed(futures):
-                try:
-                    info = fut.result() or {}
-                except Exception:
-                    continue
-                if isinstance(info, dict) and (info.get("tracks") or []):
-                    info["artist"] = artist_name
-                    infos.append(info)
-    except Exception:
-        infos = []
-
-    if not infos:
-        fallback = lastfm.get_album_tracks_detailed(artist_name, names[0]) or {}
-        if isinstance(fallback, dict) and (fallback.get("tracks") or []):
-            fallback["artist"] = artist_name
-            infos = [fallback]
-
-    deduped: list[dict] = []
-    seen_release_keys: set[str] = set()
-    for info in sorted(infos, key=_artist_release_sort_key, reverse=True):
-        release_key = _artist_release_key(info)
-        if not release_key or release_key in seen_release_keys:
-            continue
-        seen_release_keys.add(release_key)
-        deduped.append(info)
-    return deduped
-
-
-def _get_monitored_artist_entry_for_key(user_key: str, artist: str) -> dict | None:
-    user_key = (user_key or "").strip()
-    artist_key = _monitored_artist_key(artist)
-    if not user_key or not artist_key:
-        return None
-
-    with _user_store_lock:
-        store = _load_user_store()
-        user = store.get(user_key) or {}
-    if not isinstance(user, dict):
-        return None
-
-    monitors = _clean_monitored_artist_list(user.get("monitored_artists") or [])
-    for item in monitors:
-        if item.get("artist_key") == artist_key:
-            return item
-    return None
-
-
-def _set_artist_monitoring(artist: str, monitored: bool) -> dict:
-    key = _plex_user_key()
-    if not key:
-        raise RuntimeError("Not authenticated")
-
-    artist_name = _normalize_monitor_artist_name(artist)
-    if not artist_name:
-        raise ValueError("Missing artist")
-    artist_key = _monitored_artist_key(artist_name)
-
-    seen_release_keys: list[str] = []
-    newest_release_name = ""
-    newest_release_ts = 0
-
-    if monitored:
-        if not LASTFM_API_KEY:
-            raise ValueError("LASTFM_API_KEY is required for artist monitoring")
-        candidates = _get_artist_release_candidates(artist_name, ARTIST_MONITOR_RELEASE_SCAN_LIMIT)
-        for candidate in candidates:
-            release_key = _artist_release_key(candidate)
-            if release_key and release_key not in seen_release_keys:
-                seen_release_keys.append(release_key)
-            if not newest_release_name:
-                newest_release_name = str(candidate.get("album") or "").strip()
-                try:
-                    newest_release_ts = int(candidate.get("published_ts") or 0)
-                except Exception:
-                    newest_release_ts = 0
-        seen_release_keys = seen_release_keys[:_ARTIST_MONITOR_MAX_SEEN_RELEASES]
-
-    with _user_store_lock:
-        store = _load_user_store()
-        user = store.get(key)
-        if not isinstance(user, dict):
-            user = {}
-
-        monitors = _clean_monitored_artist_list(user.get("monitored_artists") or [])
-        monitors = [item for item in monitors if item.get("artist_key") != artist_key]
-
-        if monitored:
-            now_ts = int(time.time())
-            monitors.append(
-                {
-                    "artist": artist_name,
-                    "artist_key": artist_key,
-                    "enabled_at": now_ts,
-                    "last_checked_at": now_ts if seen_release_keys else 0,
-                    "last_error": "",
-                    "last_seen_release_key": seen_release_keys[0] if seen_release_keys else "",
-                    "last_seen_release_name": newest_release_name,
-                    "last_seen_release_ts": newest_release_ts,
-                    "seen_release_keys": seen_release_keys,
-                    "release_retry_state": {},
-                }
-            )
-
-        user["monitored_artists"] = _clean_monitored_artist_list(monitors)
-        store[key] = user
-        _save_user_store(store)
-
-    return {
-        "artist": artist_name,
-        "monitored": bool(monitored),
-        "last_seen_release_name": newest_release_name,
-        "last_seen_release_ts": newest_release_ts,
-    }
 
 
 
@@ -3027,7 +2757,10 @@ def _scraper_base_cmd() -> list[str]:
 
 
 def _build_scraper_cmd(csv_path: str) -> list[str]:
-    return _scraper_base_cmd() + ["--csv", csv_path, "--output", str(MUSIC_LIBRARY_PATH)]
+    return (
+        _scraper_base_cmd()
+        + ["--csv", csv_path, "--service", SERVICE, "--output", str(MUSIC_LIBRARY_PATH)]
+    )
 
 
 def _job_view(job: dict) -> dict:
@@ -3219,176 +2952,6 @@ def _ensure_download_worker() -> None:
         _download_worker.start()
 
 
-def _has_active_download_job(submitted_by: str, artist: str, title: str, dl_type: str) -> bool:
-    owner = (submitted_by or "").strip().lower()
-    norm_artist = _norm_artist(artist)
-    norm_title = _norm_text(title)
-
-    with _download_lock:
-        for job in download_status.values():
-            if str(job.get("status") or "").lower() not in {"queued", "running"}:
-                continue
-            if (job.get("submitted_by") or "").strip().lower() != owner:
-                continue
-            if str(job.get("type") or "").lower() != str(dl_type or "").lower():
-                continue
-            if _norm_artist(job.get("artist") or "") != norm_artist:
-                continue
-            if _norm_text(job.get("title") or "") != norm_title:
-                continue
-            return True
-    return False
-
-
-def _expand_download_request(artist: str, title: str, dl_type: str) -> dict:
-    if not artist:
-        raise ValueError("Missing artist field")
-
-    client = None
-    if dl_type in {"album", "artist"}:
-        if not LASTFM_API_KEY:
-            raise ValueError("LASTFM_API_KEY needed for album/artist download expansion")
-        client = LastFmClient(api_key=LASTFM_API_KEY, username=LASTFM_USERNAME)
-
-    tracks_to_download: list[dict[str, str]] = []
-    skipped_existing: list[list[str]] = []
-    skipped_duplicates: list[list[str]] = []
-    planned_keys: set[str] = set()
-
-    if dl_type == "track":
-        if not title:
-            raise ValueError("Missing title for track download")
-        if _track_in_library(artist, title):
-            return {
-                "tracks_to_download": [],
-                "skipped_existing": skipped_existing,
-                "skipped_duplicates": skipped_duplicates,
-                "already_in_library": True,
-                "message": "Already in library",
-            }
-        track_key = _track_key(artist, title)
-        if track_key in planned_keys:
-            return {
-                "tracks_to_download": [],
-                "skipped_existing": skipped_existing,
-                "skipped_duplicates": skipped_duplicates,
-                "already_in_library": True,
-                "message": "Duplicate track in request",
-            }
-        planned_keys.add(track_key)
-        tracks_to_download.append({"artist": artist, "title": title})
-
-    elif dl_type == "album":
-        logger.info("Expanding album: %s by %s", title, artist)
-        tracks = client.get_album_tracks(artist, title)
-        if not tracks:
-            raise FileNotFoundError("Could not find tracks for this album")
-        for t_artist, t_title in tracks:
-            track_key = _track_key(t_artist, t_title)
-            if track_key in planned_keys:
-                skipped_duplicates.append([t_artist, t_title])
-                continue
-            planned_keys.add(track_key)
-            if _track_in_library(t_artist, t_title):
-                skipped_existing.append([t_artist, t_title])
-            else:
-                tracks_to_download.append({"artist": t_artist, "title": t_title})
-
-    elif dl_type == "artist":
-        logger.info("Expanding artist top tracks: %s", artist)
-        tracks = client.get_artist_top_tracks(artist, limit=10)
-        if not tracks:
-            raise FileNotFoundError("Could not find top tracks for this artist")
-        for t_artist, t_title in tracks:
-            track_key = _track_key(t_artist, t_title)
-            if track_key in planned_keys:
-                skipped_duplicates.append([t_artist, t_title])
-                continue
-            planned_keys.add(track_key)
-            if _track_in_library(t_artist, t_title):
-                skipped_existing.append([t_artist, t_title])
-            else:
-                tracks_to_download.append({"artist": t_artist, "title": t_title})
-    else:
-        raise ValueError("Unsupported download type")
-
-    return {
-        "tracks_to_download": tracks_to_download,
-        "skipped_existing": skipped_existing,
-        "skipped_duplicates": skipped_duplicates,
-        "already_in_library": not tracks_to_download,
-        "message": "Already in library" if not tracks_to_download else "Queued",
-    }
-
-
-def _enqueue_download_job(
-    artist: str,
-    title: str,
-    dl_type: str,
-    submitted_by: str,
-    *,
-    source: str = "",
-    extra_fields: dict | None = None,
-) -> dict:
-    expanded = _expand_download_request(artist, title, dl_type)
-    tracks_to_download = expanded["tracks_to_download"]
-    skipped_existing = expanded["skipped_existing"]
-    skipped_duplicates = expanded["skipped_duplicates"]
-
-    if not tracks_to_download:
-        return {
-            "success": True,
-            "message": expanded.get("message") or "Already in library",
-            "already_in_library": True,
-            "skipped": len(skipped_existing),
-            "skipped_duplicates": len(skipped_duplicates),
-            "download_id": "",
-            "total_tracks": 0,
-        }
-
-    job_id = f"dl_{int(time.time())}_{secrets.token_hex(6)}"
-    job = {
-        "id": job_id,
-        "type": dl_type,
-        "artist": artist,
-        "title": title,
-        "status": "queued",
-        "created_at": time.time(),
-        "started_at": None,
-        "finished_at": None,
-        "message": "Queued",
-        "tracks": tracks_to_download,
-        "total_tracks": len(tracks_to_download),
-        "completed_tracks": 0,
-        "failed_tracks": 0,
-        "failed_tracks_list": [],
-        "current_index": 0,
-        "current_track": None,
-        "submitted_by": (submitted_by or "").strip().lower(),
-        "last_error": "",
-        "last_output": "",
-        "source": source,
-    }
-    if extra_fields:
-        job.update(extra_fields)
-
-    with _download_lock:
-        download_status[job_id] = job
-        _download_queue.append(job_id)
-
-    _ensure_download_worker()
-
-    return {
-        "success": True,
-        "message": "Queued",
-        "already_in_library": False,
-        "download_id": job_id,
-        "total_tracks": len(tracks_to_download),
-        "skipped": len(skipped_existing),
-        "skipped_duplicates": len(skipped_duplicates),
-    }
-
-
 def _execute_track_download(job: dict, t_artist: str, t_title: str) -> bool:
     """Download one track via scraper subprocess and update job counters.
 
@@ -3529,13 +3092,11 @@ def _execute_batch_download(job: dict, tracks: list[dict]) -> None:
         return
 
     tmp_path = None
-    evaluated_path = None
     try:
         tf = tempfile.NamedTemporaryFile(
             mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8"
         )
         tmp_path = tf.name
-        evaluated_path = str(Path(tmp_path).with_name("discover-weekly-report-evaluated.csv"))
         writer = _csv.writer(tf)
         writer.writerow(["artist", "title", "spotify_id"])
         for t in tracks:
@@ -3629,70 +3190,6 @@ def _execute_batch_download(job: dict, tracks: list[dict]) -> None:
         except Exception:
             pass
 
-        # Reconcile counters from the scraper's evaluated CSV. This makes the
-        # persisted history robust even if the live stdout parser misses some
-        # [TRACK_OK]/[TRACK_FAIL] lines.
-        success_pairs: set[tuple[str, str]] = set()
-        if evaluated_path and os.path.exists(evaluated_path):
-            try:
-                with open(evaluated_path, "r", encoding="utf-8", newline="") as fh:
-                    reader = _csv.DictReader(fh)
-                    for row in reader:
-                        artist = (row.get("artist") or "").strip()
-                        title = (row.get("title") or "").strip()
-                        if artist and title:
-                            success_pairs.add((artist, title))
-            except Exception:
-                pass
-
-        with _download_lock:
-            total_tracks = len(tracks)
-            recorded_completed = int(job.get("completed_tracks") or 0)
-            recorded_failed = int(job.get("failed_tracks") or 0)
-
-            if success_pairs:
-                job["completed_tracks"] = max(recorded_completed, len(success_pairs))
-
-            completed_pairs = set(success_pairs)
-            failed_entries = list(job.get("failed_tracks_list") or [])
-            failed_pairs = {
-                ((entry.get("artist") or "").strip(), (entry.get("title") or "").strip())
-                for entry in failed_entries
-                if (entry.get("artist") or "").strip() and (entry.get("title") or "").strip()
-            }
-
-            missing_pairs = []
-            for track in tracks:
-                pair = ((track.get("artist") or "").strip(), (track.get("title") or "").strip())
-                if not pair[0] or not pair[1]:
-                    continue
-                if pair in completed_pairs or pair in failed_pairs:
-                    continue
-                missing_pairs.append(pair)
-
-            if missing_pairs:
-                if int(proc.returncode or 0) == 0:
-                    # Successful process with missing structured events: treat the
-                    # remaining tracks as successful so history reflects reality.
-                    job["completed_tracks"] = int(job.get("completed_tracks") or 0) + len(missing_pairs)
-                else:
-                    job["failed_tracks"] = int(job.get("failed_tracks") or 0) + len(missing_pairs)
-                    brief = (job.get("last_error") or "Batch failed before reporting per-track results").strip()
-                    for artist, title in missing_pairs:
-                        job.setdefault("failed_tracks_list", []).append(
-                            {"artist": artist, "title": title, "error": brief[:200]}
-                        )
-
-            accounted = int(job.get("completed_tracks") or 0) + int(job.get("failed_tracks") or 0)
-            if accounted > total_tracks:
-                overflow = accounted - total_tracks
-                job["completed_tracks"] = max(0, int(job.get("completed_tracks") or 0) - overflow)
-
-            job["current_index"] = min(
-                total_tracks,
-                int(job.get("completed_tracks") or 0) + int(job.get("failed_tracks") or 0),
-            )
-
         # Invalidate the filesystem library index so the next import sees newly downloaded files.
         _library_index_cache["ts"] = 0.0
 
@@ -3704,11 +3201,6 @@ def _execute_batch_download(job: dict, tracks: list[dict]) -> None:
         with _download_lock:
             job["last_error"] = str(e)
     finally:
-        if evaluated_path:
-            try:
-                os.unlink(evaluated_path)
-            except Exception:
-                pass
         if tmp_path:
             try:
                 os.unlink(tmp_path)
@@ -3752,29 +3244,6 @@ def _download_worker_loop() -> None:
                 job["status"] = "partial" if completed > 0 else "failed"
             else:
                 job["status"] = "completed"
-
-        if str(job.get("source") or "") == "artist_monitor":
-            monitor_user_key = str(job.get("monitor_user_key") or "").strip()
-            monitor_artist_key = str(job.get("monitor_artist_key") or "").strip()
-            monitor_release_key = str(job.get("monitor_release_key") or "").strip()
-            monitor_release_name = str(job.get("title") or "").strip()
-            final_status = str(job.get("status") or "").strip().lower()
-            if final_status == "completed":
-                _mark_release_seen_for_user(
-                    monitor_user_key,
-                    monitor_artist_key,
-                    monitor_release_key,
-                    monitor_release_name,
-                    int(job.get("monitor_release_published_ts") or 0),
-                )
-            elif final_status in {"failed", "partial"}:
-                _record_monitored_release_attempt(
-                    monitor_user_key,
-                    monitor_artist_key,
-                    monitor_release_key,
-                    monitor_release_name,
-                    final_status,
-                )
 
         try:
             _save_history_entry(job)
@@ -3842,279 +3311,6 @@ def _download_worker_loop() -> None:
                 logger.error(f"Plex playlist creation error: {_pl_err}")
                 with _download_lock:
                     job["plex_playlist_status"] = f"error:{_pl_err}"
-
-
-_artist_monitor_worker: threading.Thread | None = None
-_artist_monitor_state: dict[str, object] = {
-    "running": False,
-    "started_at": None,
-    "last_run_at": None,
-    "last_error": None,
-}
-_artist_monitor_lock = threading.Lock()
-
-
-def _ensure_artist_monitor_worker() -> None:
-    global _artist_monitor_worker
-    with _artist_monitor_lock:
-        if _artist_monitor_worker and _artist_monitor_worker.is_alive():
-            return
-        _artist_monitor_worker = threading.Thread(target=_artist_monitor_loop, daemon=True)
-        _artist_monitor_worker.start()
-
-
-def _monitored_user_snapshots() -> list[dict]:
-    snapshots: list[dict] = []
-    with _user_store_lock:
-        store = _load_user_store()
-
-    if not isinstance(store, dict):
-        return snapshots
-
-    for user_key, raw_user in store.items():
-        if not isinstance(raw_user, dict):
-            continue
-        monitors = _clean_monitored_artist_list(raw_user.get("monitored_artists") or [])
-        if not monitors:
-            continue
-        plex = raw_user.get("plex") if isinstance(raw_user.get("plex"), dict) else {}
-        username = (
-            (plex.get("username") or plex.get("title") or user_key or "").strip().lower()
-            if isinstance(plex, dict)
-            else str(user_key or "").strip().lower()
-        )
-        snapshots.append(
-            {
-                "user_key": str(user_key or "").strip(),
-                "submitted_by": username,
-                "monitors": monitors,
-            }
-        )
-    return snapshots
-
-
-def _mark_release_seen_for_user(user_key: str, artist_key: str, release_key: str, release_name: str, published_ts: int) -> None:
-    with _user_store_lock:
-        store = _load_user_store()
-        user = store.get(user_key)
-        if not isinstance(user, dict):
-            return
-        monitors = _clean_monitored_artist_list(user.get("monitored_artists") or [])
-        updated = False
-        for item in monitors:
-            if item.get("artist_key") != artist_key:
-                continue
-            seen_keys = _clean_seen_release_keys(item.get("seen_release_keys") or [])
-            if release_key and release_key not in seen_keys:
-                seen_keys.insert(0, release_key)
-            item["seen_release_keys"] = seen_keys[:_ARTIST_MONITOR_MAX_SEEN_RELEASES]
-            retry_state = _clean_release_retry_state(item.get("release_retry_state") or {})
-            if release_key:
-                retry_state.pop(release_key, None)
-            item["release_retry_state"] = retry_state
-            item["last_checked_at"] = int(time.time())
-            item["last_error"] = ""
-            item["last_seen_release_key"] = release_key
-            item["last_seen_release_name"] = release_name
-            item["last_seen_release_ts"] = int(published_ts or 0)
-            updated = True
-            break
-        if not updated:
-            return
-        user["monitored_artists"] = monitors
-        store[user_key] = user
-        _save_user_store(store)
-
-
-def _set_monitored_artist_error(user_key: str, artist_key: str, error: str) -> None:
-    with _user_store_lock:
-        store = _load_user_store()
-        user = store.get(user_key)
-        if not isinstance(user, dict):
-            return
-        monitors = _clean_monitored_artist_list(user.get("monitored_artists") or [])
-        updated = False
-        for item in monitors:
-            if item.get("artist_key") != artist_key:
-                continue
-            item["last_checked_at"] = int(time.time())
-            item["last_error"] = str(error or "").strip()[:300]
-            updated = True
-            break
-        if not updated:
-            return
-        user["monitored_artists"] = monitors
-        store[user_key] = user
-        _save_user_store(store)
-
-
-def _record_monitored_release_attempt(
-    user_key: str,
-    artist_key: str,
-    release_key: str,
-    release_name: str,
-    status: str,
-) -> None:
-    if not user_key or not artist_key or not release_key:
-        return
-
-    now_ts = int(time.time())
-    with _user_store_lock:
-        store = _load_user_store()
-        user = store.get(user_key)
-        if not isinstance(user, dict):
-            return
-        monitors = _clean_monitored_artist_list(user.get("monitored_artists") or [])
-        updated = False
-        for item in monitors:
-            if item.get("artist_key") != artist_key:
-                continue
-            retry_state = _clean_release_retry_state(item.get("release_retry_state") or {})
-            current = retry_state.get(release_key) if isinstance(retry_state.get(release_key), dict) else {}
-            try:
-                previous_failures = int(current.get("consecutive_failures") or 0)
-            except Exception:
-                previous_failures = 0
-            consecutive_failures = previous_failures + 1
-            cooldown_until = int(current.get("cooldown_until") or 0) if isinstance(current, dict) else 0
-            if consecutive_failures >= _ARTIST_MONITOR_RETRY_FAILURE_LIMIT:
-                cooldown_until = now_ts + _ARTIST_MONITOR_RETRY_COOLDOWN_S
-                consecutive_failures = 0
-            retry_state[release_key] = {
-                "consecutive_failures": consecutive_failures,
-                "cooldown_until": cooldown_until,
-                "last_attempted_at": now_ts,
-                "last_status": str(status or "").strip(),
-            }
-            item["release_retry_state"] = retry_state
-            item["last_checked_at"] = now_ts
-            item["last_error"] = f"{release_name or 'Release'} download {status or 'failed'}"
-            updated = True
-            break
-        if not updated:
-            return
-        user["monitored_artists"] = monitors
-        store[user_key] = user
-        _save_user_store(store)
-
-
-def _release_retry_state_for_entry(entry: dict, release_key: str) -> dict[str, int | str]:
-    retry_state = _clean_release_retry_state(entry.get("release_retry_state") or {})
-    current = retry_state.get(release_key)
-    return current if isinstance(current, dict) else {}
-
-
-def _artist_monitor_loop() -> None:
-    while True:
-        with _artist_monitor_lock:
-            _artist_monitor_state["running"] = True
-            _artist_monitor_state["started_at"] = _artist_monitor_state.get("started_at") or time.time()
-
-        try:
-            snapshots = _monitored_user_snapshots()
-            for snapshot in snapshots:
-                user_key = snapshot.get("user_key") or ""
-                submitted_by = snapshot.get("submitted_by") or ""
-                monitors = snapshot.get("monitors") or []
-
-                for entry in monitors:
-                    artist = str(entry.get("artist") or "").strip()
-                    artist_key = str(entry.get("artist_key") or "").strip()
-                    if not artist or not artist_key:
-                        continue
-
-                    try:
-                        releases = _get_artist_release_candidates(artist, ARTIST_MONITOR_RELEASE_SCAN_LIMIT)
-                        if not releases:
-                            _set_monitored_artist_error(user_key, artist_key, "")
-                            continue
-
-                        unseen_releases: list[dict] = []
-                        seen_keys = set(_clean_seen_release_keys(entry.get("seen_release_keys") or []))
-                        for release in releases:
-                            release_key = _artist_release_key(release)
-                            if not release_key:
-                                continue
-                            if release_key in seen_keys:
-                                break
-                            unseen_releases.append(release)
-
-                        if not unseen_releases:
-                            newest = releases[0]
-                            _mark_release_seen_for_user(
-                                user_key,
-                                artist_key,
-                                _artist_release_key(newest),
-                                str(newest.get("album") or "").strip(),
-                                int(newest.get("published_ts") or 0),
-                            )
-                            continue
-
-                        for release in reversed(unseen_releases):
-                            album_name = str(release.get("album") or "").strip()
-                            release_key = _artist_release_key(release)
-                            if not album_name or not release_key:
-                                continue
-
-                            retry_state = _release_retry_state_for_entry(entry, release_key)
-                            try:
-                                cooldown_until = int(retry_state.get("cooldown_until") or 0)
-                            except Exception:
-                                cooldown_until = 0
-                            if cooldown_until > int(time.time()):
-                                continue
-
-                            if _album_in_library(artist, album_name):
-                                _mark_release_seen_for_user(
-                                    user_key,
-                                    artist_key,
-                                    release_key,
-                                    album_name,
-                                    int(release.get("published_ts") or 0),
-                                )
-                                continue
-
-                            if _has_active_download_job(submitted_by, artist, album_name, "album"):
-                                continue
-
-                            result = _enqueue_download_job(
-                                artist,
-                                album_name,
-                                "album",
-                                submitted_by,
-                                source="artist_monitor",
-                                extra_fields={
-                                    "monitor_user_key": user_key,
-                                    "monitor_artist": artist,
-                                    "monitor_artist_key": artist_key,
-                                    "monitor_release_key": release_key,
-                                    "monitor_release_published_ts": int(release.get("published_ts") or 0),
-                                },
-                            )
-
-                            if bool(result.get("already_in_library")):
-                                _mark_release_seen_for_user(
-                                    user_key,
-                                    artist_key,
-                                    release_key,
-                                    album_name,
-                                    int(release.get("published_ts") or 0),
-                                )
-
-                        _set_monitored_artist_error(user_key, artist_key, "")
-                    except Exception as exc:
-                        logger.warning("Artist monitor check failed for %s: %s", artist, exc)
-                        _set_monitored_artist_error(user_key, artist_key, str(exc))
-
-            with _artist_monitor_lock:
-                _artist_monitor_state["last_run_at"] = time.time()
-                _artist_monitor_state["last_error"] = None
-        except Exception as exc:
-            logger.warning("Artist monitor loop failed: %s", exc)
-            with _artist_monitor_lock:
-                _artist_monitor_state["last_error"] = str(exc)
-
-        time.sleep(ARTIST_MONITOR_INTERVAL_S)
 
 
 # Very small in-memory image cache: url -> (ts, bytes, content_type)
@@ -4578,51 +3774,6 @@ def artist_top_tracks():
     return jsonify({"artist": artist, "items": items})
 
 
-@app.route("/api/artist/monitor/status", methods=["GET"])
-def artist_monitor_status():
-    artist = (request.args.get("artist") or "").strip()
-    if not artist:
-        return jsonify({"error": "Missing artist parameter"}), 400
-
-    key = _plex_user_key()
-    if not key:
-        return jsonify({"error": "Not authenticated"}), 401
-
-    entry = _get_monitored_artist_entry_for_key(key, artist)
-    return jsonify(
-        {
-            "artist": artist,
-            "monitored": bool(entry),
-            "last_seen_release_name": (entry or {}).get("last_seen_release_name") or "",
-            "last_checked_at": int((entry or {}).get("last_checked_at") or 0),
-            "last_error": (entry or {}).get("last_error") or "",
-        }
-    )
-
-
-@app.route("/api/artist/monitor/toggle", methods=["POST"])
-def artist_monitor_toggle():
-    data = request.json or {}
-    artist = (data.get("artist") or "").strip()
-    monitored = bool(data.get("monitored"))
-    if not artist:
-        return jsonify({"error": "Missing artist"}), 400
-
-    try:
-        result = _set_artist_monitoring(artist, monitored)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 401
-    except Exception as exc:
-        logger.error("Artist monitor toggle error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-    if monitored:
-        _ensure_artist_monitor_worker()
-    return jsonify(result)
-
-
 @app.route("/api/artist/new_release", methods=["GET"])
 def artist_new_release():
     """Get the newest release (best-effort) for an artist as a track list.
@@ -4646,11 +3797,51 @@ def artist_new_release():
     if not LASTFM_API_KEY:
         return jsonify({"error": "LASTFM_API_KEY is required"}), 500
 
-    infos = _get_artist_release_candidates(artist, album_limit)
-    if not infos:
+    lastfm = LastFmClient(api_key=LASTFM_API_KEY, username=LASTFM_USERNAME)
+    albums = lastfm.get_artist_albums(artist, limit=album_limit) or []
+    if not albums:
         return jsonify({"artist": artist, "album": "", "cover_url": "", "in_library": False, "items": []})
 
-    chosen = infos[0]
+    # Fetch a few album infos (parallel) to find the newest published_ts.
+    names: list[str] = []
+    for a in albums:
+        try:
+            n = (a.get("name") or "").strip()
+        except Exception:
+            n = ""
+        if n:
+            names.append(n)
+    names = names[:album_limit]
+    if not names:
+        return jsonify({"artist": artist, "album": "", "cover_url": "", "in_library": False, "items": []})
+
+    infos: list[dict] = []
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+            futures = [ex.submit(lastfm.get_album_tracks_detailed, artist, n) for n in names]
+            for fut in concurrent.futures.as_completed(futures):
+                try:
+                    info = fut.result() or {}
+                    if isinstance(info, dict) and (info.get("tracks") or []):
+                        infos.append(info)
+                except Exception:
+                    continue
+    except Exception:
+        infos = []
+
+    chosen: dict = {}
+    if infos:
+        # Prefer the most recent published_ts; if absent everywhere, fall back to first.
+        def _ts(x: dict) -> int:
+            try:
+                return int(x.get("published_ts") or 0)
+            except Exception:
+                return 0
+
+        infos.sort(key=_ts, reverse=True)
+        chosen = infos[0]
+    else:
+        chosen = lastfm.get_album_tracks_detailed(artist, names[0]) or {}
 
     album_name = (chosen.get("album") or "").strip()
     cover_url = (chosen.get("cover_url") or "").strip()
@@ -4936,6 +4127,8 @@ def download():
     
     artist = data.get("artist", "")
     title = data.get("title", "")
+    album = data.get("album", "")
+    spotify_id = data.get("spotify_id", "")
     dl_type = data.get("type", "track")
     # 'title' comes as the Album Name or Artist Name (from 'title' variable in JS) if type is album/artist
     # In JS: downloadItem(artist, name, type) -> name becomes 'title' in JSON.
@@ -4945,18 +4138,115 @@ def download():
         return jsonify({"error": "Missing artist field"}), 400
     
     try:
-        result = _enqueue_download_job(artist, title, dl_type, _session_username_lower())
-        if result.get("already_in_library"):
-            return jsonify(result), 200
-        logger.info("Queued download job %s: %s - %s (%s)", result.get("download_id"), artist, title, dl_type)
-        return jsonify(result), 202
-    except FileNotFoundError as exc:
-        return jsonify({"error": str(exc)}), 404
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except Exception as exc:
-        logger.error("Download enqueue error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
+        # LastFmClient only needed for expansion
+        client = None
+        if dl_type in ["album", "artist"]:
+            if not LASTFM_API_KEY:
+                return jsonify({"error": "LASTFM_API_KEY needed for album/artist download expansion"}), 500
+            client = LastFmClient(api_key=LASTFM_API_KEY, username=LASTFM_USERNAME)
+
+        tracks_to_download: list[dict[str, str]] = []
+        skipped_existing: list[list[str]] = []
+        skipped_duplicates: list[list[str]] = []
+        planned_keys: set[str] = set()
+
+        if dl_type == "track":
+            if not title:
+                return jsonify({"error": "Missing title for track download"}), 400
+            if _track_in_library(artist, title):
+                return jsonify({"success": True, "message": "Already in library", "already_in_library": True}), 200
+            k = _track_key(artist, title)
+            if k in planned_keys:
+                return jsonify({"success": True, "message": "Duplicate track in request", "already_in_library": True}), 200
+            planned_keys.add(k)
+            tracks_to_download.append({"artist": artist, "title": title})
+
+        elif dl_type == "album":
+            album_name = title
+            logger.info(f"Expanding album: {album_name} by {artist}")
+            tracks = client.get_album_tracks(artist, album_name)
+            if not tracks:
+                return jsonify({"error": "Could not find tracks for this album"}), 404
+            for t_artist, t_title in tracks:
+                k = _track_key(t_artist, t_title)
+                if k in planned_keys:
+                    skipped_duplicates.append([t_artist, t_title])
+                    continue
+                planned_keys.add(k)
+                if _track_in_library(t_artist, t_title):
+                    skipped_existing.append([t_artist, t_title])
+                else:
+                    tracks_to_download.append({"artist": t_artist, "title": t_title})
+
+        elif dl_type == "artist":
+            logger.info(f"Expanding artist top tracks: {artist}")
+            tracks = client.get_artist_top_tracks(artist, limit=10)
+            if not tracks:
+                return jsonify({"error": "Could not find top tracks for this artist"}), 404
+            for t_artist, t_title in tracks:
+                k = _track_key(t_artist, t_title)
+                if k in planned_keys:
+                    skipped_duplicates.append([t_artist, t_title])
+                    continue
+                planned_keys.add(k)
+                if _track_in_library(t_artist, t_title):
+                    skipped_existing.append([t_artist, t_title])
+                else:
+                    tracks_to_download.append({"artist": t_artist, "title": t_title})
+
+        if not tracks_to_download:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": "Already in library",
+                    "already_in_library": True,
+                    "skipped": len(skipped_existing),
+                    "skipped_duplicates": len(skipped_duplicates),
+                }
+            ), 200
+
+        job_id = f"dl_{int(time.time())}_{secrets.token_hex(6)}"
+        job = {
+            "id": job_id,
+            "type": dl_type,
+            "artist": artist,
+            "title": title,
+            "status": "queued",
+            "created_at": time.time(),
+            "started_at": None,
+            "finished_at": None,
+            "message": "Queued",
+            "tracks": tracks_to_download,
+            "total_tracks": len(tracks_to_download),
+            "completed_tracks": 0,
+            "failed_tracks": 0,
+            "failed_tracks_list": [],
+            "submitted_by": _session_username_lower(),
+            "last_error": "",
+            "last_output": "",
+        }
+
+        with _download_lock:
+            download_status[job_id] = job
+            _download_queue.append(job_id)
+
+        _ensure_download_worker()
+
+        logger.info(f"Queued download job {job_id}: {artist} - {title} ({dl_type})")
+        return jsonify(
+            {
+                "success": True,
+                "message": "Queued",
+                "download_id": job_id,
+                "total_tracks": len(tracks_to_download),
+                "skipped": len(skipped_existing),
+                "skipped_duplicates": len(skipped_duplicates),
+            }
+        ), 202
+
+    except Exception as e:
+        logger.error(f"Download enqueue error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/downloads", methods=["GET"])
@@ -4984,7 +4274,102 @@ def health():
     return jsonify({
         "status": "healthy",
         "music_library": str(MUSIC_LIBRARY_PATH),
-        "service_order": ["tidal", "qobuz", "amazon"]
+        "service": SERVICE
+    })
+
+
+# ---------------------------------------------------------------------------
+# Shazam-like track identification
+# ---------------------------------------------------------------------------
+
+def _convert_audio_to_wav(audio_bytes: bytes) -> bytes:
+    """Convert audio bytes (typically WebM/Opus from MediaRecorder) to WAV via ffmpeg."""
+    import tempfile
+    import os as _os
+
+    with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as f:
+        f.write(audio_bytes)
+        input_path = f.name
+
+    output_path = input_path + '.wav'
+    try:
+        result = subprocess.run(
+            ['ffmpeg', '-y', '-i', input_path, '-ar', '16000', '-ac', '1', '-f', 'wav', output_path],
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode(errors='replace'))
+        with open(output_path, 'rb') as wf:
+            return wf.read()
+    finally:
+        for p in (input_path, output_path):
+            try:
+                _os.unlink(p)
+            except Exception:
+                pass
+
+
+@app.route("/api/shazam", methods=["POST"])
+def shazam_identify():
+    """Identify a short audio clip using Shazam's recognition API.
+
+    Accepts a multipart/form-data POST with a file field named 'audio'.
+    Returns JSON: {"found": bool, "title": str, "artist": str, "cover_url": str}
+    """
+    audio_file = request.files.get("audio")
+    if not audio_file:
+        return jsonify({"error": "No audio file provided"}), 400
+
+    audio_bytes = audio_file.read()
+    if not audio_bytes:
+        return jsonify({"error": "Empty audio data"}), 400
+
+    # Convert to WAV for reliable fingerprinting
+    try:
+        wav_bytes = _convert_audio_to_wav(audio_bytes)
+    except FileNotFoundError:
+        return jsonify({"error": "ffmpeg is not available on this server"}), 501
+    except Exception as e:
+        logger.warning(f"Shazam audio conversion error: {e}")
+        return jsonify({"error": "Audio conversion failed"}), 500
+
+    # Identify with shazamio
+    try:
+        import asyncio
+        from shazamio import Shazam  # type: ignore[import]
+
+        async def _recognize(data: bytes) -> dict:
+            s = Shazam()
+            return await s.recognize_song(data)
+
+        result = asyncio.run(_recognize(wav_bytes))
+    except ImportError:
+        return jsonify({"error": "shazamio is not installed on this server"}), 501
+    except Exception as e:
+        logger.warning(f"Shazam recognition error: {e}")
+        return jsonify({"error": "Recognition failed — try again with clearer audio"}), 500
+
+    track = result.get("track") if isinstance(result, dict) else None
+    if not track:
+        return jsonify({"found": False})
+
+    title = str(track.get("title") or "").strip()
+    artist = str(track.get("subtitle") or "").strip()
+
+    # Best-quality cover art from the Shazam response
+    images = track.get("images") or {}
+    cover_url = (
+        images.get("coverarthq")
+        or images.get("coverart")
+        or ""
+    )
+
+    return jsonify({
+        "found": True,
+        "title": title,
+        "artist": artist,
+        "cover_url": cover_url,
     })
 
 
@@ -5005,7 +4390,6 @@ def run_webui(host="0.0.0.0", port=5000):
     except Exception:
         pass
 
-    _ensure_artist_monitor_worker()
     logger.info(f"Starting Web UI on {host}:{port}")
     app.run(host=host, port=port, debug=False)
 
