@@ -4039,6 +4039,7 @@ body.is-desktop-webui .mobile-nav-only {
   border: 2px solid var(--accent-scan);
   opacity: 0;
   transform: scale(1);
+  pointer-events: none;
 }
 
 .scout-ring.is-listening::before {
