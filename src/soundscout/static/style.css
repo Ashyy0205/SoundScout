@@ -4019,6 +4019,21 @@ body.is-desktop-webui .mobile-nav-only {
   padding: 24px 16px;
 }
 
+/* Scout view: remove .main padding/scroll so the result card fills edge-to-edge */
+body.view-scout .main {
+  padding: 0;
+  overflow: hidden;
+}
+
+body.view-scout .results-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  height: 100%;
+}
+
 /* When Scout is active, switch the grid container to flex so the
    stage fills and centres correctly instead of sitting top-left. */
 body.view-scout .results-container {
@@ -4214,7 +4229,8 @@ body.view-scout .results-container {
 .scout-match {
   position: relative;
   width: 100%;
-  min-height: calc(100dvh - 160px);
+  height: 100%;
+  min-height: 0;
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -4246,19 +4262,22 @@ body.view-scout .results-container {
   gap: 12px;
   width: 100%;
   max-width: 360px;
-  padding: 28px 20px 40px;
+  padding: 20px 20px 28px;
+  overflow-y: auto;
+  max-height: 100%;
 }
 
 /* ── Cover art ── */
 .scout-match-cover-wrap {
   position: relative;
-  width: min(72vw, 280px);
-  height: min(72vw, 280px);
+  width: min(55vw, 220px);
+  height: min(55vw, 220px);
   border-radius: 18px;
   overflow: hidden;
   box-shadow: 0 12px 60px rgba(0,0,0,0.7), 0 0 0 1px rgba(2,215,242,0.2),
               0 0 40px rgba(2,215,242,0.18);
   animation: scout-cover-in 0.55s cubic-bezier(0.22,1,0.36,1) both;
+  flex-shrink: 0;
 }
 @keyframes scout-cover-in {
   from { transform: scale(0.82); opacity: 0; }
@@ -4424,6 +4443,42 @@ body.view-scout .results-container {
 }
 
 .scout-again-link { display: none; }
+
+/* In-library tick badge on cover art */
+.scout-inlib-tick {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent-signal, #39ff6e);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #000;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+  animation: scout-fade-up 0.3s both;
+  z-index: 2;
+}
+.scout-inlib-tick svg { width: 14px; height: 14px; stroke: #000; }
+
+/* Disabled state on circular scout buttons */
+.scout-circle-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.scout-circle-btn:disabled:hover {
+  border-color: rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.06);
+  box-shadow: none;
+  transform: none;
+}
+
+/* Spin keyframe for loading icon */
+@keyframes scout-spin {
+  to { transform: rotate(360deg); }
+}
 
 /* ── Mobile density ── */
 @media (max-width: 520px) {

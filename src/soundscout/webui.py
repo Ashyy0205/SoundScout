@@ -4318,6 +4318,16 @@ def _convert_audio_to_wav(audio_bytes: bytes) -> bytes:
                 pass
 
 
+@app.route("/api/library/check", methods=["GET"])
+def library_check_track():
+    """Quick in-library check for a single track. Used by the Scout result card."""
+    artist = (request.args.get("artist") or "").strip()
+    title  = (request.args.get("title")  or "").strip()
+    if not artist or not title:
+        return jsonify({"in_library": False})
+    return jsonify({"in_library": _track_in_library(artist, title)})
+
+
 @app.route("/api/shazam", methods=["POST"])
 def shazam_identify():
     """Identify a short audio clip using Shazam's recognition API.

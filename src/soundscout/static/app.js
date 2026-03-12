@@ -3090,16 +3090,7 @@ function scoutPreviewTap() {
         btn,
         _scoutResultData.cover_url || ''
     );
-    // Swap the SVG icon between play ▶ and pause ❚❚ based on new data-state
-    if (!btn) return;
-    const isPause = btn.getAttribute('data-state') === 'pause';
-    btn.innerHTML = isPause
-        ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
-             <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
-           </svg>`
-        : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
-             <polygon points="6 3 20 12 6 21"/>
-           </svg>`;
+    // Icon is updated reactively by _watchScoutPlayBtn's MutationObserver
 }
 
 function scoutDownloadTap() {
@@ -3185,6 +3176,53 @@ function _renderScoutResult(token, data) {
     `;
 
     currentView = { kind: 'scout', state: { result: data } };
+
+    // Reactive icon swap: observe data-state attribute set by setPreviewButtonState
+    _watchScoutPlayBtn();
+    // Async library check — green tick + disabled download if already owned
+    _checkScoutLibrary(token);
+}
+
+function _watchScoutPlayBtn() {
+    const btn = document.getElementById('scoutPreviewBtn');
+    if (!btn) return;
+    const playIcon  = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="6 3 20 12 6 21"/></svg>`;
+    const pauseIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="5" y="4" width="4" height="16"/><rect x="15" y="4" width="4" height="16"/></svg>`;
+    const loadIcon  = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10" opacity=".25"/><path d="M12 2a10 10 0 0 1 10 10" style="animation:scout-spin .8s linear infinite;transform-origin:center"/></svg>`;
+    const obs = new MutationObserver(() => {
+        const s = btn.dataset.state;
+        if (s === 'pause')   btn.innerHTML = pauseIcon;
+        else if (s === 'loading') btn.innerHTML = loadIcon;
+        else                  btn.innerHTML = playIcon;
+    });
+    obs.observe(btn, { attributes: true, attributeFilter: ['data-state'] });
+}
+
+async function _checkScoutLibrary(token) {
+    if (!_scoutResultData) return;
+    const { artist, title } = _scoutResultData;
+    if (!artist || !title) return;
+    try {
+        const resp = await fetch(`/api/library/check?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`);
+        if (!resp.ok || !isActiveView('scout', token)) return;
+        const json = await resp.json();
+        if (!isActiveView('scout', token) || !json.in_library) return;
+        // Already owned — add green tick badge on the cover
+        const wrap = document.querySelector('.scout-match-cover-wrap');
+        if (wrap && !wrap.querySelector('.scout-inlib-tick')) {
+            const tick = document.createElement('div');
+            tick.className = 'scout-inlib-tick';
+            tick.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+            wrap.appendChild(tick);
+        }
+        // Grey out and disable the download button
+        const dlBtn = document.getElementById('scoutDownloadBtn');
+        if (dlBtn) {
+            dlBtn.disabled = true;
+            dlBtn.title = 'Already in your library';
+            dlBtn.setAttribute('aria-label', 'Already in your library');
+        }
+    } catch (_) { /* network error — silently skip */ }
 }
 
 function _renderScoutNotFound(token) {
