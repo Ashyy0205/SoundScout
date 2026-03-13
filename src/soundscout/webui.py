@@ -2682,11 +2682,13 @@ def _best_lastfm_image_url(images: list[dict] | None) -> str:
         return ""
     for size in ["extralarge", "large", "medium"]:
         for img in images:
-            if img.get("size") == size and img.get("#text"):
-                return img.get("#text")
+            u = img.get("#text") or ""
+            if img.get("size") == size and u and ".gif" not in u.lower():
+                return u
     for img in reversed(images):
-        if img.get("#text"):
-            return img.get("#text")
+        u = img.get("#text") or ""
+        if u and ".gif" not in u.lower():
+            return u
     return ""
 
 
@@ -2696,8 +2698,47 @@ def _lastfm_track_cover_url(artist: str, title: str) -> str:
     return url
 
 
+def _itunes_track_cover_url(artist: str, title: str) -> str:
+    """Return an iTunes artwork URL for a track, or '' on any failure.
+
+    Uses the public iTunes Search API (no key needed).  Upgrades the
+    returned 100×100 token to 3000×3000 for the best quality.
+    """
+    a = (artist or "").strip()
+    t = (title or "").strip()
+    if not a or not t:
+        return ""
+    try:
+        from urllib.parse import quote as _quote
+        q = _quote(f"{a} {t}")
+        resp = requests.get(
+            f"https://itunes.apple.com/search?term={q}&entity=song&limit=5&media=music",
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return ""
+        results = resp.json().get("results") or []
+        if not results:
+            return ""
+        art = results[0].get("artworkUrl100") or ""
+        if art and ".gif" not in art.lower():
+            art = art.replace("100x100bb.jpg", "3000x3000bb.jpg") \
+                     .replace("100x100bb.png", "3000x3000bb.png")
+        elif ".gif" in art.lower():
+            art = ""
+        return art
+    except Exception:
+        return ""
+
+
 def _lastfm_track_cover_info(artist: str, title: str) -> tuple[str, str]:
-    """Return (cover_url, album_name) for a track using Last.fm track.getInfo."""
+    """Return (cover_url, album_name) for a track.
+
+    Sources tried in order until a non-placeholder image is found:
+      1. Last.fm track.getInfo (album art)
+      2. Spotify /v1/search (album art)
+      3. iTunes Search API
+    """
     if not LASTFM_API_KEY:
         return "", ""
     a = (artist or "").strip()
@@ -2705,6 +2746,10 @@ def _lastfm_track_cover_info(artist: str, title: str) -> tuple[str, str]:
     if not a or not t:
         return "", ""
 
+    album_name = ""
+    url = ""
+
+    # --- Source 1: Last.fm ---
     try:
         resp = requests.get(
             "https://ws.audioscrobbler.com/2.0/",
@@ -2718,19 +2763,41 @@ def _lastfm_track_cover_info(artist: str, title: str) -> tuple[str, str]:
             },
             timeout=10,
         )
-        if resp.status_code != 200:
-            return "", ""
-        data = resp.json() if isinstance(resp.json(), dict) else {}
-        track_obj = data.get("track", {}) if isinstance(data, dict) else {}
-        album_obj = track_obj.get("album", {}) if isinstance(track_obj, dict) else {}
-        album_name = (album_obj.get("title") or "") if isinstance(album_obj, dict) else ""
-        images = album_obj.get("image", []) if isinstance(album_obj, dict) else []
-        url = _best_lastfm_image_url(images)
-        if _is_lastfm_placeholder_image(url):
-            return "", album_name
-        return url, album_name
+        if resp.status_code == 200:
+            data = resp.json() if isinstance(resp.json(), dict) else {}
+            track_obj = data.get("track", {}) if isinstance(data, dict) else {}
+            album_obj = track_obj.get("album", {}) if isinstance(track_obj, dict) else {}
+            album_name = (album_obj.get("title") or "") if isinstance(album_obj, dict) else ""
+            images = album_obj.get("image", []) if isinstance(album_obj, dict) else []
+            candidate = _best_lastfm_image_url(images)
+            if candidate and not _is_lastfm_placeholder_image(candidate):
+                url = candidate
     except Exception:
-        return "", ""
+        pass
+
+    if url:
+        return url, album_name
+
+    # --- Source 2: Spotify ---
+    try:
+        cid = _builtin_spotify_client_id()
+        if cid:
+            _sp = SpotifyClient(client_id=cid, client_secret="")
+            candidate = _sp.get_track_cover_url(a, t)
+            if candidate:
+                return candidate, album_name
+    except Exception:
+        pass
+
+    # --- Source 3: iTunes ---
+    try:
+        candidate = _itunes_track_cover_url(a, t)
+        if candidate:
+            return candidate, album_name
+    except Exception:
+        pass
+
+    return "", album_name
 
 
 def _cached_lastfm_track_cover_url(artist: str, title: str) -> str:
@@ -3961,7 +4028,7 @@ def home_shelves():
     # --- Enrich first 20 covers per shelf concurrently ---
     def _enrich_shelf_covers(shelf: dict) -> None:
         items = shelf.get("items", [])
-        enrich_n = min(len(items), 20)
+        enrich_n = len(items)  # enrich all items, not just first 20
 
         def _enrich_one(idx: int) -> tuple[int, str, str]:
             it = items[idx]

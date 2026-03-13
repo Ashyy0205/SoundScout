@@ -590,6 +590,36 @@ class SpotifyClient:
 
         return None
 
+    def get_track_cover_url(self, artist: str, title: str) -> str:
+        """Return the best album art URL for a track via Spotify search.
+
+        Uses the same /v1/search endpoint as get_track_preview but
+        returns the album cover rather than the preview URL, and does
+        not require a preview to exist.  Returns "" on any failure.
+        """
+        artist = (artist or "").strip()
+        title = (title or "").strip()
+        if not artist or not title:
+            return ""
+        try:
+            token = self._get_token()
+            q = f'track:"{title}" artist:"{artist}"'
+            resp = requests.get(
+                "https://api.spotify.com/v1/search",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"q": q, "type": "track", "limit": 5},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            items = resp.json().get("tracks", {}).get("items", [])
+            if not isinstance(items, list) or not items:
+                return ""
+            images = (items[0].get("album") or {}).get("images") or []
+            url = self._pick_image_url(images, max_px=640) or ""
+            return url if ".gif" not in url.lower() else ""
+        except Exception:
+            return ""
+
     # ──────────────────────────────────────────────────────────────
     # Spotify URL resolver (track / album / playlist)
     # ──────────────────────────────────────────────────────────────
