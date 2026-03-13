@@ -3207,6 +3207,13 @@ def _execute_batch_download(job: dict, tracks: list[dict]) -> None:
     except Exception as e:
         with _download_lock:
             job["last_error"] = str(e)
+            # Count all unprocessed tracks as failed so the worker loop
+            # correctly marks the job as 'failed' rather than 'completed'.
+            already_done = int(job.get("completed_tracks") or 0) + int(job.get("failed_tracks") or 0)
+            unprocessed = max(0, len(tracks) - already_done)
+            if unprocessed > 0:
+                job["failed_tracks"] = int(job.get("failed_tracks") or 0) + unprocessed
+        logger.error("Batch download raised exception for job %s: %s", job.get("id", ""), e)
     finally:
         if tmp_path:
             try:
@@ -3241,16 +3248,27 @@ def _download_worker_loop() -> None:
         ]
         _execute_batch_download(job, batch_tracks)
         any_failed = bool(job.get("failed_tracks"))
+        completed_ct = int(job.get("completed_tracks") or 0)
+        total_ct = len(batch_tracks)
 
         with _download_lock:
             job["finished_at"] = time.time()
             job["current_track"] = None
-            job["message"] = "Done"
             if any_failed:
-                completed = int(job.get("completed_tracks") or 0)
-                job["status"] = "partial" if completed > 0 else "failed"
+                job["status"] = "partial" if completed_ct > 0 else "failed"
+                job["message"] = f"Done ({completed_ct}/{total_ct} downloaded)"
+            elif completed_ct == 0 and total_ct > 0:
+                # Scraper exited without emitting any TRACK_OK/TRACK_FAIL lines
+                # (binary missing, provider error, crash, etc.) — surface it as a failure.
+                job["status"] = "failed"
+                job["message"] = job.get("last_error") or "No tracks were downloaded"
+                logger.error(
+                    "Download job %s completed with 0/%d tracks — scraper may have crashed. last_error: %s",
+                    job.get("id", ""), total_ct, job.get("last_error", "(none)"),
+                )
             else:
                 job["status"] = "completed"
+                job["message"] = "Done"
 
         try:
             _save_history_entry(job)
