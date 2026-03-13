@@ -1198,12 +1198,15 @@ async function openHomeRecommendations(force) {
 
 function renderShelf(shelf) {
     const section = document.createElement('div');
-    section.className = 'home-shelf';
+    section.className = 'home-shelf at-scroll-start';
 
     const titleEl = document.createElement('div');
     titleEl.className = 'shelf-title';
     titleEl.textContent = shelf.title || '';
     section.appendChild(titleEl);
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'shelf-track-wrapper';
 
     const track = document.createElement('div');
     track.className = 'shelf-track';
@@ -1212,7 +1215,42 @@ function renderShelf(shelf) {
         track.appendChild(createResultCard(item, 'track'));
     });
 
-    section.appendChild(track);
+    wrapper.appendChild(track);
+
+    // Arrow buttons — visibility is controlled via CSS on desktop hover
+    const leftArrow = document.createElement('button');
+    leftArrow.className = 'shelf-arrow shelf-arrow-left';
+    leftArrow.setAttribute('aria-label', 'Scroll left');
+    leftArrow.setAttribute('type', 'button');
+    leftArrow.innerHTML = '&#10094;'; // ❮
+    leftArrow.addEventListener('click', () => {
+        track.scrollBy({ left: -(track.clientWidth * 0.75), behavior: 'smooth' });
+    });
+
+    const rightArrow = document.createElement('button');
+    rightArrow.className = 'shelf-arrow shelf-arrow-right';
+    rightArrow.setAttribute('aria-label', 'Scroll right');
+    rightArrow.setAttribute('type', 'button');
+    rightArrow.innerHTML = '&#10095;'; // ❯
+    rightArrow.addEventListener('click', () => {
+        track.scrollBy({ left: track.clientWidth * 0.75, behavior: 'smooth' });
+    });
+
+    wrapper.appendChild(leftArrow);
+    wrapper.appendChild(rightArrow);
+    section.appendChild(wrapper);
+
+    function updateScrollState() {
+        const atStart = track.scrollLeft <= 2;
+        const atEnd = track.scrollLeft + track.clientWidth >= track.scrollWidth - 2;
+        section.classList.toggle('at-scroll-start', atStart);
+        section.classList.toggle('can-scroll-left', !atStart);
+        section.classList.toggle('at-scroll-end', atEnd);
+    }
+
+    track.addEventListener('scroll', updateScrollState, { passive: true });
+    requestAnimationFrame(updateScrollState);
+
     return section;
 }
 
