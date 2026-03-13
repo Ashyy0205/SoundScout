@@ -120,6 +120,7 @@ let authAuthed = false;
 let authUser = null;
 let authPollTimer = null;
 let authPollStartedAt = 0;
+let authPopupWindow = null;
 
 // Auth should default to ON; if the backend can't be reached,
 // we should prompt instead of silently allowing access.
@@ -235,6 +236,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('message', (event) => {
         try {
             if (event && event.data && event.data.type === 'plex-auth-complete') {
+                setAuthLoadingState(true, 'Loading your Plex account...');
                 initAuth();
             }
         } catch (e) {
@@ -1174,6 +1176,40 @@ function setAuthError(message) {
     el.innerHTML = message;
 }
 
+function setAuthLoadingState(loading, message) {
+    const titleEl = document.getElementById('authTitle');
+    const subtitleEl = document.getElementById('authSubtitle');
+    const actionsEl = document.getElementById('authActions');
+    const loadingEl = document.getElementById('authLoading');
+    const loadingTextEl = document.getElementById('authLoadingText');
+    const loginBtn = document.getElementById('plexLoginBtn');
+
+    if (loading) {
+        if (titleEl) titleEl.textContent = 'Signing In';
+        if (subtitleEl) {
+            subtitleEl.textContent = 'Please wait while your Plex account loads';
+        }
+        if (loadingTextEl) {
+            loadingTextEl.textContent = String(message || 'Loading your Plex account...');
+        }
+        if (actionsEl) actionsEl.style.display = 'none';
+        if (loadingEl) loadingEl.style.display = 'block';
+        if (loginBtn) loginBtn.disabled = true;
+        setAuthOverlayVisible(true);
+        return;
+    }
+
+    if (titleEl) {
+        titleEl.textContent = titleEl.dataset.defaultText || 'Authentication Required';
+    }
+    if (subtitleEl) {
+        subtitleEl.textContent = subtitleEl.dataset.defaultText || 'VERIFIED PLEX USERS ONLY';
+    }
+    if (actionsEl) actionsEl.style.display = '';
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (loginBtn) loginBtn.disabled = false;
+}
+
 async function initAuth() {
     try {
         const resp = await fetch('/api/auth/status');
@@ -1225,6 +1261,7 @@ async function initAuth() {
                     logoutBtn.style.display = 'none';
                     if (authRequired) {
                         setAuthError('');
+                        setAuthLoadingState(false);
                         setAuthOverlayVisible(true);
                     }
                 });
@@ -1294,6 +1331,7 @@ async function initAuth() {
                     if (sidebarRunBtnEl) sidebarRunBtnEl.style.display = 'none';
                     if (authRequired) {
                         setAuthError('');
+                        setAuthLoadingState(false);
                         setAuthOverlayVisible(true);
                     }
                 });
@@ -1341,8 +1379,10 @@ async function initAuth() {
 
         if (authRequired && !authAuthed) {
             setAuthError('');
+            setAuthLoadingState(false);
             setAuthOverlayVisible(true);
         } else {
+            setAuthLoadingState(false);
             setAuthOverlayVisible(false);
             // Refresh per-user Last.fm state after auth.
             initLastfm();
@@ -1359,9 +1399,11 @@ async function initAuth() {
         const userLabel = document.getElementById('authUserLabel');
         if (userLabel) userLabel.textContent = '';
         if (authRequired) {
+            setAuthLoadingState(false);
             setAuthError('Unable to contact the server auth endpoint. Please refresh and try again.');
             setAuthOverlayVisible(true);
         } else {
+            setAuthLoadingState(false);
             setAuthOverlayVisible(false);
             setActiveNav('search');
             openHomeRecommendations(false);
@@ -1371,6 +1413,7 @@ async function initAuth() {
 
 async function startPlexLogin() {
     setAuthError('');
+    setAuthLoadingState(true, 'Connecting to Plex...');
 
     // Open the popup window SYNCHRONOUSLY — before any await — so it is treated as a
     // direct response to the user's click gesture. Safari and Chrome on Mac (and iOS)
@@ -1393,6 +1436,7 @@ async function startPlexLogin() {
     } catch (e) {
         loginWindow = null;
     }
+    authPopupWindow = loginWindow;
 
     try {
         const resp = await fetch('/api/auth/start', { method: 'POST' });
@@ -1400,6 +1444,8 @@ async function startPlexLogin() {
 
         if (!resp.ok) {
             if (loginWindow && !loginWindow.closed) loginWindow.close();
+            authPopupWindow = null;
+            setAuthLoadingState(false);
             const rawErr = (data && data.error) ? String(data.error) : '';
             const friendly = rawErr.replace(/_/g, ' ') || 'Failed to start Plex login';
             setAuthError(friendly.charAt(0).toUpperCase() + friendly.slice(1));
@@ -1410,6 +1456,8 @@ async function startPlexLogin() {
         const pinId = data.pin_id;
         if (!authUrl || !pinId) {
             if (loginWindow && !loginWindow.closed) loginWindow.close();
+            authPopupWindow = null;
+            setAuthLoadingState(false);
             setAuthError('Failed to start Plex login: no auth URL returned by server');
             return;
         }
@@ -1420,7 +1468,9 @@ async function startPlexLogin() {
         } else {
             // Popup was blocked — try once more with the real URL now that we have it.
             try { loginWindow = window.open(authUrl, 'plexLogin', 'width=860,height=920'); } catch (e) { loginWindow = null; }
+            authPopupWindow = loginWindow;
             if (!loginWindow || loginWindow.closed) {
+                setAuthLoadingState(false);
                 // Final fallback: show a clickable link so the user can still complete login.
                 setAuthError(
                     'Popup blocked by your browser. Please allow popups for this site and try again, ' +
@@ -1430,12 +1480,16 @@ async function startPlexLogin() {
             }
         }
 
+        setAuthLoadingState(true, 'Waiting for Plex approval...');
+
         if (authPollTimer) clearInterval(authPollTimer);
         authPollStartedAt = Date.now();
         authPollTimer = setInterval(() => pollPlexLogin(pinId), 2000);
         pollPlexLogin(pinId);
     } catch (e) {
         if (loginWindow && !loginWindow.closed) loginWindow.close();
+        authPopupWindow = null;
+        setAuthLoadingState(false);
         setAuthError('Failed to start Plex login');
     }
 }
@@ -1456,6 +1510,7 @@ async function pollPlexLogin(pinId) {
                     clearInterval(authPollTimer);
                     authPollTimer = null;
                 }
+                setAuthLoadingState(false);
                 setAuthError('Plex login timed out. Please click “Sign in with Plex” again.');
                 setAuthOverlayVisible(true);
             }
@@ -1470,13 +1525,18 @@ async function pollPlexLogin(pinId) {
         if (data.status === 'authed') {
             authAuthed = true;
             authUser = data.user || null;
-            setAuthOverlayVisible(false);
+            setAuthLoadingState(true, 'Loading your Plex account...');
+            if (authPopupWindow && !authPopupWindow.closed) {
+                try { authPopupWindow.close(); } catch (e) {}
+            }
+            authPopupWindow = null;
             // Refresh pill/buttons (and can_run_discovery) immediately.
             await initAuth();
             return;
         }
 
         if (data.status === 'denied') {
+            setAuthLoadingState(false);
             setAuthError(escHtml(data.reason || 'Access denied'));
             setAuthOverlayVisible(true);
             return;
@@ -1488,12 +1548,14 @@ async function pollPlexLogin(pinId) {
             let msg = escHtml(data.reason || 'Login failed');
             if (stage) msg = `${msg} (${stage})`;
             if (detail) msg = `${msg}: ${detail}`;
+            setAuthLoadingState(false);
             setAuthError(msg);
             setAuthOverlayVisible(true);
             return;
         }
 
         // Fallback
+        setAuthLoadingState(false);
         setAuthError('Login failed');
         setAuthOverlayVisible(true);
     } catch (e) {
@@ -1502,6 +1564,7 @@ async function pollPlexLogin(pinId) {
         try {
             const msg = (e && e.message) ? String(e.message) : '';
             if (msg && msg.toLowerCase().includes('json')) {
+                setAuthLoadingState(false);
                 setAuthError('Login failed: unexpected server response.');
                 setAuthOverlayVisible(true);
             }

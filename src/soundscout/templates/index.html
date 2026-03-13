@@ -39,17 +39,22 @@
       <img class="auth-modal-logo"
            src="{{ url_for('static', filename='soundscoutr_logo.svg') }}"
            alt="SoundScout">
-      <h2 id="authTitle">Authentication Required</h2>
-      <p class="auth-subtitle">
+      <h2 id="authTitle" data-default-text="Authentication Required">Authentication Required</h2>
+      <p id="authSubtitle" class="auth-subtitle" data-default-text="VERIFIED PLEX USERS ONLY">
         VERIFIED PLEX USERS ONLY
       </p>
 
-      <div class="auth-actions">
+      <div id="authActions" class="auth-actions">
         <button id="plexLoginBtn"
                 class="auth-primary-btn"
                 type="button">
           Log in with Plex
         </button>
+      </div>
+
+      <div id="authLoading" class="auth-loading" style="display: none;">
+        <div class="spinner auth-spinner" aria-hidden="true"></div>
+        <p id="authLoadingText">Loading your Plex account...</p>
       </div>
 
       <div id="authError"
