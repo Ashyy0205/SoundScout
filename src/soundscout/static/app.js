@@ -452,6 +452,26 @@ async function openSettings() {
         ? `<button class="nav-btn" type="button" onclick="unlinkLastfm()">Unlink Last.fm</button>`
         : '';
 
+    const plexConnectPrompt = lastfmLinked
+        ? `
+            <div class="settings-plex-connect-card">
+                <div class="settings-plex-connect-title">Connect Plex to Last.fm</div>
+                <div class="settings-plex-connect-sub">
+                    Finish setup in Plex so your listening activity can scrobble to Last.fm.
+                </div>
+                <div class="settings-plex-connect-meta">Plex: Settings -> Other Services -> Last.fm</div>
+                <div class="settings-plex-connect-actions">
+                    <a class="nav-btn nav-btn-primary"
+                       href="https://plex.tv/users/other-services"
+                       target="_blank"
+                       rel="noopener noreferrer">
+                        Open Plex Services
+                    </a>
+                </div>
+            </div>
+        `
+        : '';
+
     const adLinked = autodisc ? !!autodisc.linked_lastfm : !!lastfmLinked;
     const adEnabled = autodisc ? !!autodisc.enabled : false;
     const adWeekday = autodisc ? Number(autodisc.weekday) : 0;
@@ -480,6 +500,7 @@ async function openSettings() {
           <div class="downloads-now-sub">${linkedText}</div>
           ${usernameLinkControls}
           <div class="settings-actions-row">${unlinkButton}</div>
+                    ${plexConnectPrompt}
         </div>
       </div>
 
