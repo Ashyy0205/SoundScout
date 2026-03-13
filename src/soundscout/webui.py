@@ -18,7 +18,7 @@ from urllib.parse import quote
 from urllib.parse import urlencode
 from pathlib import Path
 from functools import lru_cache
-from flask import Flask, jsonify, request, render_template, send_from_directory, Response, session
+from flask import Flask, jsonify, request, render_template, send_from_directory, Response, session, send_file
 from flask_cors import CORS
 
 import requests
@@ -2276,13 +2276,14 @@ def _strip_track_number(name: str) -> str:
     return s.strip()
 
 
-def _build_library_index(root: Path) -> tuple[set[str], set[str], list[str]]:
+def _build_library_index(root: Path) -> tuple[set[str], set[str], list[str], dict[str, Path]]:
     track_keys: set[str] = set()
     album_keys: set[str] = set()
     norm_paths: list[str] = []
+    track_files: dict[str, Path] = {}  # track_key → absolute file path for streaming
 
     if not root.exists() or not root.is_dir():
-        return track_keys, album_keys, norm_paths
+        return track_keys, album_keys, norm_paths, track_files
 
     audio_exts = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".aiff", ".alac"}
 
@@ -2311,7 +2312,9 @@ def _build_library_index(root: Path) -> tuple[set[str], set[str], list[str]]:
                 # Track key from folder artist + filename (minus track number)
                 title_guess = _strip_track_number(p.stem)
                 if title_guess:
-                    track_keys.add(_track_key(grandparent, title_guess))
+                    k = _track_key(grandparent, title_guess)
+                    track_keys.add(k)
+                    track_files[k] = p  # folder-based match takes priority
 
             # Secondary heuristic for non-Plex layouts: Artist - ... - Title
             stem = p.stem.replace("–", "-").replace("—", "-")
@@ -2320,14 +2323,17 @@ def _build_library_index(root: Path) -> tuple[set[str], set[str], list[str]]:
                 artist_guess = parts[0]
                 title_guess = _strip_track_number(parts[-1])
                 if artist_guess and title_guess:
-                    track_keys.add(_track_key(artist_guess, title_guess))
+                    k = _track_key(artist_guess, title_guess)
+                    track_keys.add(k)
+                    if k not in track_files:  # don't override folder-based match
+                        track_files[k] = p
         except Exception:
             continue
 
-    return track_keys, album_keys, norm_paths
+    return track_keys, album_keys, norm_paths, track_files
 
 
-def _get_library_index() -> tuple[set[str], set[str], list[str]]:
+def _get_library_index() -> tuple[set[str], set[str], list[str], dict[str, Path]]:
     now = time.time()
     root_str = str(MUSIC_LIBRARY_PATH)
 
@@ -2339,6 +2345,7 @@ def _get_library_index() -> tuple[set[str], set[str], list[str]]:
             _library_index_cache.get("track_keys", set()),
             _library_index_cache.get("album_keys", set()),
             _library_index_cache.get("norm_paths", []),
+            _library_index_cache.get("track_files", {}),
         )
 
     # Slow path: acquire lock so only one thread builds at a time.
@@ -2351,15 +2358,17 @@ def _get_library_index() -> tuple[set[str], set[str], list[str]]:
                 _library_index_cache.get("track_keys", set()),
                 _library_index_cache.get("album_keys", set()),
                 _library_index_cache.get("norm_paths", []),
+                _library_index_cache.get("track_files", {}),
             )
 
-        track_keys, album_keys, norm_paths = _build_library_index(MUSIC_LIBRARY_PATH)
+        track_keys, album_keys, norm_paths, track_files = _build_library_index(MUSIC_LIBRARY_PATH)
         _library_index_cache["ts"] = time.time()
         _library_index_cache["root"] = root_str
         _library_index_cache["track_keys"] = track_keys
         _library_index_cache["album_keys"] = album_keys
         _library_index_cache["norm_paths"] = norm_paths
-        return track_keys, album_keys, norm_paths
+        _library_index_cache["track_files"] = track_files
+        return track_keys, album_keys, norm_paths, track_files
 
 
 def _primary_artist(artist: str) -> str:
@@ -2372,7 +2381,7 @@ def _primary_artist(artist: str) -> str:
 
 
 def _track_in_library(artist: str, title: str) -> bool:
-    track_keys, _, norm_paths = _get_library_index()
+    track_keys, _, norm_paths, _ = _get_library_index()
 
     # Try full artist string first.
     key = _track_key(artist, title)
@@ -2399,7 +2408,7 @@ def _track_in_library(artist: str, title: str) -> bool:
 
 
 def _album_in_library(artist: str, album: str) -> bool:
-    _, album_keys, norm_paths = _get_library_index()
+    _, album_keys, norm_paths, _ = _get_library_index()
     key = _album_key(artist, album)
     if key in album_keys:
         return True
@@ -2411,6 +2420,23 @@ def _album_in_library(artist: str, album: str) -> bool:
         if a in np and al in np:
             return True
     return False
+
+
+def _find_track_file(artist: str, title: str) -> "Path | None":
+    """Return the absolute Path of the local audio file for a track, or None if not in library."""
+    _, _, _, track_files = _get_library_index()
+
+    key = _track_key(artist, title)
+    if key in track_files:
+        return track_files[key]
+
+    primary = _primary_artist(artist)
+    if primary and primary.lower() != artist.lower():
+        key2 = _track_key(primary, title)
+        if key2 in track_files:
+            return track_files[key2]
+
+    return None
 
 
 def _annotate_in_library(items: list[dict], item_type: str) -> None:
@@ -3484,6 +3510,83 @@ def preview():
         return jsonify({"preview_url": url, "provider": "itunes"})
 
     return jsonify({"error": "No preview available"}), 404
+
+
+@app.route("/api/stream", methods=["GET"])
+def stream_info():
+    """Resolve the best audio URL available for a track.
+
+    Checks the local library first (returns a full seekable stream for the
+    /api/stream/file endpoint); falls back to a 30-second Spotify/iTunes preview.
+
+    Response: {"url": "...", "full": bool, "provider": "local|spotify|itunes"}
+    """
+    artist = request.args.get("artist", "").strip()
+    title  = request.args.get("title",  "").strip()
+    if not artist or not title:
+        return jsonify({"error": "Missing artist or title"}), 400
+
+    # 1) Local library — full seekable file
+    file_path = _find_track_file(artist, title)
+    if file_path:
+        url = f"/api/stream/file?artist={quote(artist)}&title={quote(title)}"
+        return jsonify({"url": url, "full": True, "provider": "local"})
+
+    # 2) Spotify 30s preview
+    try:
+        spotify_client_id, spotify_client_secret = _get_spotify_credentials()
+        if spotify_client_id and spotify_client_secret:
+            spotify = SpotifyClient(client_id=spotify_client_id, client_secret=spotify_client_secret)
+            info = spotify.get_track_preview(artist, title)
+            if info and info.get("preview_url"):
+                return jsonify({"url": info["preview_url"], "full": False, "provider": "spotify"})
+    except Exception as e:
+        logger.debug("Spotify stream lookup failed: %s", e)
+
+    # 3) iTunes fallback
+    url = _itunes_preview(artist, title)
+    if url:
+        return jsonify({"url": url, "full": False, "provider": "itunes"})
+
+    return jsonify({"error": "No audio available"}), 404
+
+
+@app.route("/api/stream/file", methods=["GET"])
+def stream_file():
+    """Stream a local library audio file with Range header support for seeking.
+
+    Security: the file path is resolved through the library index;
+    only files inside MUSIC_LIBRARY_PATH are served.
+    """
+    artist = request.args.get("artist", "").strip()
+    title  = request.args.get("title",  "").strip()
+    if not artist or not title:
+        return jsonify({"error": "Missing artist or title"}), 400
+
+    file_path = _find_track_file(artist, title)
+    if not file_path:
+        return jsonify({"error": "Track not found in library"}), 404
+
+    # Security: ensure resolved path is within MUSIC_LIBRARY_PATH
+    try:
+        file_path.resolve().relative_to(MUSIC_LIBRARY_PATH.resolve())
+    except ValueError:
+        return jsonify({"error": "Access denied"}), 403
+
+    mime_map = {
+        ".flac": "audio/flac",
+        ".mp3":  "audio/mpeg",
+        ".m4a":  "audio/mp4",
+        ".aac":  "audio/aac",
+        ".ogg":  "audio/ogg",
+        ".opus": "audio/ogg; codecs=opus",
+        ".wav":  "audio/wav",
+        ".aiff": "audio/aiff",
+        ".alac": "audio/mp4",
+    }
+    mime = mime_map.get(file_path.suffix.lower(), "audio/mpeg")
+
+    return send_file(file_path, mimetype=mime, conditional=True)
 
 
 @app.route("/api/search", methods=["GET"])

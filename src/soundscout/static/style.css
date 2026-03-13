@@ -1677,12 +1677,24 @@ a { color: inherit; text-decoration: none; }
 .playerbar-control.is-pause::before { content: '❚❚'; margin-left: 0; font-size: 0.95rem; }
 
 .playerbar-progress {
+  position: relative;
   width: 260px;
   max-width: 32vw;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.playerbar-progress-track {
+  position: absolute;
+  left: 0;
+  right: 0;
   height: 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.10);
   overflow: hidden;
+  pointer-events: none;
 }
 
 .playerbar-progress-fill {
@@ -1690,9 +1702,81 @@ a { color: inherit; text-decoration: none; }
   width: 0%;
   background: linear-gradient(90deg, var(--accent-scan), rgba(2, 215, 242, 0.35));
   border-radius: 999px;
+  transition: width 0.1s linear;
 }
 
-.playerbar-right { display: flex; justify-content: flex-end; }
+/* Seek slider — transparent track, themed thumb appears on hover */
+.playerbar-seek {
+  -webkit-appearance: none;
+  appearance: none;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  cursor: pointer;
+  z-index: 2;
+  margin: 0;
+  padding: 0;
+}
+
+.playerbar-seek::-webkit-slider-runnable-track {
+  height: 6px;
+  background: transparent;
+  border-radius: 999px;
+}
+
+.playerbar-seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-scan);
+  margin-top: -4px;
+  box-shadow: 0 0 8px rgba(2, 215, 242, 0.6);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.playerbar-seek:hover::-webkit-slider-thumb,
+.playerbar-seek:active::-webkit-slider-thumb { opacity: 1; }
+
+.playerbar-seek::-moz-range-track {
+  height: 6px;
+  background: transparent;
+  border-radius: 999px;
+}
+
+.playerbar-seek::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-scan);
+  border: none;
+  box-shadow: 0 0 8px rgba(2, 215, 242, 0.6);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.playerbar-seek:hover::-moz-range-thumb,
+.playerbar-seek:active::-moz-range-thumb { opacity: 1; }
+
+.playerbar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.playerbar-time {
+  font-size: 0.70rem;
+  font-family: var(--font-ui);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 .playerbar-badge {
   padding: 6px 10px;
@@ -1705,6 +1789,11 @@ a { color: inherit; text-decoration: none; }
   letter-spacing: 0.18em;
   text-transform: uppercase;
   font-weight: 700;
+}
+
+.playerbar-badge.is-full {
+  border-color: rgba(0, 255, 159, 0.40);
+  color: var(--success);
 }
 
 /* =========================================================
@@ -3588,7 +3677,7 @@ body.is-desktop-webui .sidebar-brand.desktop-sidebar-only span {
   body.is-mobile-webui .playerbar-progress {
     width: 110px;
     max-width: 24vw;
-    height: 4px;
+    height: 20px;
   }
 
   body.is-mobile-webui .playerbar-right {

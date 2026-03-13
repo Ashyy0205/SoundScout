@@ -235,14 +235,21 @@
               disabled></button>
 
       <div class="playerbar-progress">
-        <div id="playerProgressFill"
-             class="playerbar-progress-fill"
-             style="width: 0%;"></div>
+        <div class="playerbar-progress-track">
+          <div id="playerProgressFill"
+               class="playerbar-progress-fill"
+               style="width: 0%;"></div>
+        </div>
+        <input type="range" id="playerSeek"
+               class="playerbar-seek"
+               min="0" max="1000" value="0" step="1"
+               aria-label="Seek">
       </div>
     </div>
 
     <div class="playerbar-right">
-      <div class="playerbar-badge">PREVIEW</div>
+      <span id="playerTime" class="playerbar-time">0:00</span>
+      <div id="playerBadge" class="playerbar-badge">PREVIEW</div>
     </div>
   </div>
 

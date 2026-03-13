@@ -104,6 +104,10 @@ let playerArtistEl = null;
 let playerPlayBtn = null;
 let playerProgressFill = null;
 let playerProgressTimer = null;
+let playerSeekEl = null;
+let playerTimeEl = null;
+let playerBadgeEl = null;
+let _playerSeeking = false;
 
 // Escape a string for safe insertion into innerHTML.
 function escHtml(s) {
@@ -191,6 +195,26 @@ document.addEventListener('DOMContentLoaded', () => {
     playerArtistEl = document.getElementById('playerArtist');
     playerPlayBtn = document.getElementById('playerPlayBtn');
     playerProgressFill = document.getElementById('playerProgressFill');
+    playerSeekEl = document.getElementById('playerSeek');
+    playerTimeEl = document.getElementById('playerTime');
+    playerBadgeEl = document.getElementById('playerBadge');
+
+    if (playerSeekEl && !playerSeekEl.dataset.bound) {
+        playerSeekEl.dataset.bound = '1';
+        playerSeekEl.addEventListener('mousedown', () => { _playerSeeking = true; });
+        playerSeekEl.addEventListener('touchstart', () => { _playerSeeking = true; }, { passive: true });
+        playerSeekEl.addEventListener('input', () => {
+            if (!previewAudio) return;
+            const dur = Number(previewAudio.duration || 0);
+            if (!isFinite(dur) || dur <= 0) return;
+            const ratio = Number(playerSeekEl.value) / 1000;
+            previewAudio.currentTime = ratio * dur;
+            if (playerProgressFill) playerProgressFill.style.width = `${(ratio * 100).toFixed(1)}%`;
+        });
+        playerSeekEl.addEventListener('change', () => { _playerSeeking = false; });
+        playerSeekEl.addEventListener('mouseup', () => { _playerSeeking = false; });
+        playerSeekEl.addEventListener('touchend', () => { _playerSeeking = false; });
+    }
 
     if (playerPlayBtn && !playerPlayBtn.dataset.bound) {
         playerPlayBtn.dataset.bound = '1';
@@ -1233,6 +1257,9 @@ function setPlayerMeta(meta) {
         playerPlayBtn.disabled = true;
         playerPlayBtn.classList.remove('is-pause');
         if (playerProgressFill) playerProgressFill.style.width = '0%';
+        if (playerSeekEl) playerSeekEl.value = 0;
+        if (playerTimeEl) playerTimeEl.textContent = '0:00';
+        if (playerBadgeEl) { playerBadgeEl.textContent = 'PREVIEW'; playerBadgeEl.classList.remove('is-full'); }
         if (playerArtEl) playerArtEl.style.backgroundImage = '';
         setPlayerVisible(false);
         return;
@@ -1254,15 +1281,26 @@ function setPlayerPlayState(state) {
 }
 
 function updatePlayerProgress() {
-    if (!playerProgressFill || !previewAudio) return;
+    if (!previewAudio) return;
     const dur = Number(previewAudio.duration || 0);
     const cur = Number(previewAudio.currentTime || 0);
-    if (!dur || !isFinite(dur) || dur <= 0) {
-        playerProgressFill.style.width = '0%';
-        return;
+    const valid = dur && isFinite(dur) && dur > 0;
+    const pct = valid ? Math.max(0, Math.min(100, (cur / dur) * 100)) : 0;
+
+    if (!_playerSeeking) {
+        if (playerProgressFill) playerProgressFill.style.width = `${pct.toFixed(1)}%`;
+        if (playerSeekEl) playerSeekEl.value = Math.round(pct * 10);
     }
-    const pct = Math.max(0, Math.min(100, (cur / dur) * 100));
-    playerProgressFill.style.width = `${pct.toFixed(1)}%`;
+
+    if (playerTimeEl) {
+        const fmt = (s) => {
+            if (!isFinite(s) || s < 0) return '0:00';
+            const m = Math.floor(s / 60);
+            const ss = Math.floor(s % 60);
+            return `${m}:${ss.toString().padStart(2, '0')}`;
+        };
+        playerTimeEl.textContent = valid ? `${fmt(cur)} / ${fmt(dur)}` : '0:00';
+    }
 }
 
 function setAuthOverlayVisible(visible) {
@@ -1770,8 +1808,8 @@ async function togglePreview(artist, title, button, coverUrl) {
     if (button) setPreviewButtonState(button, 'loading');
 
     try {
-        const data = await apiFetchJson(`/api/preview?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`);
-        const url = data.preview_url || '';
+        const data = await apiFetchJson(`/api/stream?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`);
+        const url = data.url || '';
 
         if (!url) {
             if (button) setPreviewButtonState(button, 'none');
@@ -1782,6 +1820,10 @@ async function togglePreview(artist, title, button, coverUrl) {
         }
 
         currentPreviewUrl = url;
+        if (playerBadgeEl) {
+            playerBadgeEl.textContent = data.full ? 'NOW PLAYING' : 'PREVIEW';
+            playerBadgeEl.classList.toggle('is-full', !!data.full);
+        }
         previewAudio.src = url;
         await previewAudio.play();
 
