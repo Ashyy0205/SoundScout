@@ -963,6 +963,11 @@ function renderDownloadsView(state) {
         const submittedByBadge = (state && state.is_admin && job && job.submitted_by)
             ? `<span class="history-user-badge">${escapeHtml(String(job.submitted_by))}</span>`
             : '';
+        // Show last_error inline for jobs that failed at the scraper level (no per-track errors).
+        const jobErr = (status === 'failed' && job && job.last_error)
+            ? String(job.last_error).replace(/\s+/g, ' ').trim()
+            : '';
+        const subParts = [type, progressText, jobErr ? `Error: ${jobErr.length > 120 ? jobErr.slice(0, 120) + '…' : jobErr}` : ''].filter(Boolean);
 
         const row = document.createElement('div');
         row.className = 'track-row download-track-row';
@@ -971,7 +976,7 @@ function renderDownloadsView(state) {
             <div class="track-num">${escapeHtml(String(idx + 1))}</div>
             <div class="track-main">
                 <div class="track-row-title">${escapeHtml(artist)} — ${escapeHtml(title)} ${submittedByBadge}</div>
-                <div class="track-row-sub">${escapeHtml([type, progressText].filter(Boolean).join(' • '))}</div>
+                <div class="track-row-sub${jobErr ? ' is-error' : ''}">${escapeHtml(subParts.join(' • '))}</div>
                 <div class="downloads-row-bar">
                     <div class="download-job-bar"><div class="download-job-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
                 </div>
@@ -988,10 +993,12 @@ function renderDownloadsView(state) {
     resultsContainer.appendChild(list);
 
     // ── Failed tracks section (from recently-finished in-memory jobs) ────
+    // Includes jobs with per-track failures AND jobs that failed at the scraper level (no track list).
     const failedJobs = jobs.filter(j => {
         const s = normStatus(j && j.status);
-        return (s === 'partial' || s === 'failed') &&
-               Array.isArray(j.failed_tracks_list) && j.failed_tracks_list.length > 0;
+        if (s !== 'partial' && s !== 'failed') return false;
+        return (Array.isArray(j.failed_tracks_list) && j.failed_tracks_list.length > 0) ||
+               (s === 'failed' && j.last_error);
     });
 
     if (failedJobs.length > 0) {
@@ -1006,6 +1013,16 @@ function renderDownloadsView(state) {
         failedJobs.forEach(job => {
             const ftl = job.failed_tracks_list || [];
             const jobLabel = [job.artist, job.title].filter(Boolean).join(' — ') || 'Unknown job';
+
+            // Scraper-level failure (no per-track list) — show the error message directly.
+            if (ftl.length === 0 && job.last_error) {
+                const crashBlock = document.createElement('div');
+                crashBlock.className = 'failed-tracks-job-header';
+                const errText = String(job.last_error).replace(/\s+/g, ' ').trim();
+                crashBlock.innerHTML = `<span>Scraper failed for <em>${escapeHtml(jobLabel)}</em>: <span class="failed-track-error" title="${escapeHtml(errText)}">${escapeHtml(errText.length > 200 ? errText.slice(0, 200) + '\u2026' : errText)}</span></span>`;
+                failSection.appendChild(crashBlock);
+                return;
+            }
 
             // Copy button — builds a plain-text list for the user.
             const copyBtn = document.createElement('button');

@@ -3111,7 +3111,9 @@ def _execute_batch_download(job: dict, tracks: list[dict]) -> None:
         tf.close()
 
         cmd = _build_scraper_cmd(tmp_path)
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        # Merge stderr into stdout so scraper error messages (auth failures,
+        # config errors, etc.) are captured in last_output instead of vanishing.
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
         _TRACK_OK_RE      = _re.compile(r'^\[TRACK_OK\] (.+?) \|\| (.+?)$')
         _TRACK_FAIL_RE    = _re.compile(r'^\[TRACK_FAIL\] (.+?) \|\| (.+?) \|\| (.*)$')
@@ -3196,6 +3198,20 @@ def _execute_batch_download(job: dict, tracks: list[dict]) -> None:
             reader_t.join(timeout=5.0)
         except Exception:
             pass
+
+        # If the scraper exited with a non-zero code and we have no TRACK_OK/TRACK_FAIL
+        # lines, surface the captured output as the error so it's visible in the UI.
+        if not timed_out and proc.returncode not in (None, 0):
+            completed_so_far = int(job.get("completed_tracks") or 0)
+            failed_so_far = int(job.get("failed_tracks") or 0)
+            if completed_so_far + failed_so_far == 0:
+                tail = (output_tail[0] or "").strip()
+                with _download_lock:
+                    job["last_error"] = tail[-800:] if tail else f"Scraper exited with code {proc.returncode}"
+                logger.error(
+                    "Scraper exited with code %d for job %s. Output tail: %s",
+                    proc.returncode, job.get("id", ""), (tail or "")[-400:],
+                )
 
         # Invalidate the filesystem library index so the next import sees newly downloaded files.
         _library_index_cache["ts"] = 0.0
