@@ -1715,6 +1715,10 @@ _library_scan_cache: dict[str, tuple[float, dict]] = {}
 _RECOMMENDATIONS_CACHE_TTL_SECONDS = 5 * 60
 _recommendations_cache: dict[str, tuple[float, list]] = {}
 
+# Home shelves cache: per-user (or "__anon__" for logged-out), keyed by Last.fm username.
+_HOME_CACHE_TTL_SECONDS = 10 * 60
+_home_cache: dict[str, tuple[float, list]] = {}
+
 
 def _plex_music_library_name() -> str:
     """Best-effort: prefer env var, otherwise fall back to settings if available."""
@@ -2431,12 +2435,15 @@ def _annotate_in_library(items: list[dict], item_type: str) -> None:
                 try:
                     strict_in_lib, _ = _album_all_tracks_in_library(artist, album)
                     it["in_library"] = strict_in_lib
+                    it["partial"] = not strict_in_lib
                 except Exception:
                     # API error or timeout? Fallback to basic check but log it?
                     # For now, trust the basic check if API fails.
                     it["in_library"] = True
+                    it["partial"] = False
             else:
                 it["in_library"] = False
+                it["partial"] = False
 
 
 def _album_all_tracks_in_library(artist: str, album: str) -> tuple[bool, int]:
@@ -3671,6 +3678,206 @@ def recommendations():
         pass
 
     return jsonify({"items": items})
+
+
+@app.route("/api/home", methods=["GET"])
+def home_shelves():
+    """Return shelf-based home page content (horizontal scrolling rows).
+
+    Query params:
+        bust: if truthy, bypass the server-side cache.
+
+    Response:
+        {"shelves": [ {"id": str, "title": str, "items": [...]} ]}
+
+    If Last.fm is linked the response includes:
+      - "For You" recommendations shelf (tracks not yet in library)
+      - Up to 2 "Because you like [Artist]" shelves based on recent top artists
+      - A "Global Chart" shelf
+    If Last.fm is not linked or the user has no account:
+      - "Global Chart" shelf
+      - "UK Chart" shelf
+    """
+    bust_cache = bool(request.args.get("bust", ""))
+
+    if not LASTFM_API_KEY:
+        return jsonify({"shelves": []})
+
+    username = _get_linked_lastfm_username()
+    cache_key = (username or "__anon__").lower().strip()
+
+    if not bust_cache:
+        cached = _home_cache.get(cache_key)
+        if cached and (time.time() - cached[0]) < _HOME_CACHE_TTL_SECONDS:
+            return jsonify({"shelves": cached[1], "cached": True})
+
+    lastfm = LastFmClient(api_key=LASTFM_API_KEY, username=username or "")
+    shelves: list[dict] = []
+
+    if username:
+        # --- Shelf: Personal recommendations ---
+        try:
+            rec_tracks = lastfm.get_recommended_tracks(max_tracks=40, seed_count=20, similar_per_seed=5)
+            seen: set[tuple[str, str]] = set()
+            rec_items: list[dict] = []
+            for tr in rec_tracks:
+                a = (tr.artist or "").strip()
+                t = (tr.title or "").strip()
+                if not a or not t:
+                    continue
+                k = (_norm_artist(a), _norm_track_title(t))
+                if k in seen:
+                    continue
+                seen.add(k)
+                in_lib = False
+                try:
+                    in_lib = _track_in_library(a, t)
+                except Exception:
+                    pass
+                rec_items.append({"name": t, "artist": a, "type": "track", "cover_url": "", "in_library": in_lib})
+            rec_items.sort(key=lambda it: bool(it.get("in_library")))
+            if rec_items:
+                shelves.append({"id": "recommendations", "title": "For You", "items": rec_items})
+        except Exception as e:
+            logger.warning("Home: recommendations shelf failed: %s", e)
+
+        # --- Shelves: Because you like [Artist] ---
+        try:
+            top_artists = lastfm.get_top_artists_recent(limit=3)
+
+            def _build_similar_shelf(source_artist: str) -> dict | None:
+                similar_artists = lastfm.get_similar_artists(source_artist, limit=8)
+                items: list[dict] = []
+                shelf_seen: set[tuple[str, str]] = set()
+                for sim_artist in similar_artists[:6]:
+                    try:
+                        tracks = lastfm.get_artist_top_tracks(sim_artist, limit=5)
+                        for t_artist, t_title in tracks:
+                            k = (_norm_artist(t_artist), _norm_track_title(t_title))
+                            if k in shelf_seen:
+                                continue
+                            shelf_seen.add(k)
+                            in_lib = False
+                            try:
+                                in_lib = _track_in_library(t_artist, t_title)
+                            except Exception:
+                                pass
+                            items.append({"name": t_title, "artist": t_artist, "type": "track", "cover_url": "", "in_library": in_lib})
+                    except Exception:
+                        pass
+                if not items:
+                    return None
+                return {"id": f"similar_{source_artist}", "title": f"Because you like {source_artist}", "items": items[:30]}
+
+            ordered_results: list[tuple[int, dict]] = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+                futures = {ex.submit(_build_similar_shelf, artist): i for i, artist in enumerate(top_artists[:2])}
+                for fut in concurrent.futures.as_completed(futures):
+                    try:
+                        shelf = fut.result()
+                        if shelf:
+                            ordered_results.append((futures[fut], shelf))
+                    except Exception:
+                        pass
+            ordered_results.sort(key=lambda x: x[0])
+            for _, shelf in ordered_results:
+                shelves.append(shelf)
+        except Exception as e:
+            logger.warning("Home: similar artist shelves failed: %s", e)
+
+    # --- Chart shelves (always shown) ---
+    try:
+        chart_tracks = lastfm.get_global_chart_tracks(limit=40)
+        chart_items: list[dict] = []
+        for t in chart_tracks:
+            a = t.get("artist", "")
+            n = t.get("name", "")
+            in_lib = False
+            try:
+                in_lib = _track_in_library(a, n)
+            except Exception:
+                pass
+            chart_items.append({"name": n, "artist": a, "type": "track", "cover_url": "", "in_library": in_lib})
+        if chart_items:
+            shelves.append({"id": "chart_global", "title": "Global Chart", "items": chart_items})
+    except Exception as e:
+        logger.warning("Home: global chart shelf failed: %s", e)
+
+    if not username:
+        try:
+            uk_tracks = lastfm.get_geo_top_tracks("United Kingdom", limit=40)
+            uk_items: list[dict] = []
+            for t in uk_tracks:
+                a = t.get("artist", "")
+                n = t.get("name", "")
+                in_lib = False
+                try:
+                    in_lib = _track_in_library(a, n)
+                except Exception:
+                    pass
+                uk_items.append({"name": n, "artist": a, "type": "track", "cover_url": "", "in_library": in_lib})
+            if uk_items:
+                shelves.append({"id": "chart_uk", "title": "UK Chart", "items": uk_items})
+        except Exception as e:
+            logger.warning("Home: UK chart shelf failed: %s", e)
+
+    # --- Enrich first 20 covers per shelf concurrently ---
+    def _enrich_shelf_covers(shelf: dict) -> None:
+        items = shelf.get("items", [])
+        enrich_n = min(len(items), 20)
+
+        def _enrich_one(idx: int) -> tuple[int, str, str]:
+            it = items[idx]
+            url, album_name = _cached_lastfm_track_cover_info(it.get("artist", ""), it.get("name", ""))
+            return idx, url, album_name
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+                futures_inner = [ex.submit(_enrich_one, i) for i in range(enrich_n)]
+                for fut in concurrent.futures.as_completed(futures_inner):
+                    try:
+                        i, url, album_name = fut.result()
+                        if url:
+                            items[i]["cover_url"] = url
+                        if album_name:
+                            items[i]["_lastfm_album"] = album_name
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Propagate covers to unenriched tracks from the same album.
+        album_cover: dict[tuple[str, str], str] = {}
+        for it in items:
+            if it.get("cover_url") and it.get("_lastfm_album"):
+                ak = (_norm_artist(it.get("artist", "")), it["_lastfm_album"].lower().strip())
+                if ak not in album_cover:
+                    album_cover[ak] = it["cover_url"]
+        for it in items:
+            if not it.get("cover_url") and it.get("_lastfm_album"):
+                ak = (_norm_artist(it.get("artist", "")), it["_lastfm_album"].lower().strip())
+                if ak in album_cover:
+                    it["cover_url"] = album_cover[ak]
+        for it in items:
+            it.pop("_lastfm_album", None)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            cover_futures = [ex.submit(_enrich_shelf_covers, shelf) for shelf in shelves]
+            for fut in concurrent.futures.as_completed(cover_futures):
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    try:
+        _home_cache[cache_key] = (time.time(), shelves)
+    except Exception:
+        pass
+
+    return jsonify({"shelves": shelves})
 
 
 @app.route("/api/lastfm/track_cover", methods=["GET"])

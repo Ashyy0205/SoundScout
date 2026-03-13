@@ -608,6 +608,106 @@ class LastFmClient:
         return recommendations[:max_tracks]
 
 
+    def get_top_artists_recent(self, limit: int = 10) -> list[str]:
+        """Get user's top artists over the last month."""
+        params = {
+            "method": "user.getTopArtists",
+            "user": self.username,
+            "api_key": self.api_key,
+            "format": "json",
+            "period": "1month",
+            "limit": limit,
+        }
+        try:
+            resp = requests.get("https://ws.audioscrobbler.com/2.0/", params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            artists = data.get("topartists", {}).get("artist", [])
+            if isinstance(artists, dict):
+                artists = [artists]
+            return [a["name"] for a in (artists or []) if a.get("name")]
+        except Exception as e:
+            logger.warning("Failed to get top artists: %s", e)
+            return []
+
+    def get_similar_artists(self, artist: str, limit: int = 10) -> list[str]:
+        """Get artists similar to the given artist using artist.getSimilar."""
+        params = {
+            "method": "artist.getSimilar",
+            "artist": artist,
+            "api_key": self.api_key,
+            "format": "json",
+            "autocorrect": 1,
+            "limit": limit,
+        }
+        try:
+            resp = requests.get("https://ws.audioscrobbler.com/2.0/", params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            similar = data.get("similarartists", {}).get("artist", [])
+            if isinstance(similar, dict):
+                similar = [similar]
+            return [a["name"] for a in (similar or []) if a.get("name")]
+        except Exception as e:
+            logger.warning("Failed to get similar artists for %s: %s", artist, e)
+            return []
+
+    def get_global_chart_tracks(self, limit: int = 50) -> list[dict]:
+        """Get the global top tracks from chart.getTopTracks (no auth required)."""
+        params = {
+            "method": "chart.getTopTracks",
+            "api_key": self.api_key,
+            "format": "json",
+            "limit": limit,
+        }
+        try:
+            resp = requests.get("https://ws.audioscrobbler.com/2.0/", params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            tracks = data.get("tracks", {}).get("track", [])
+            if isinstance(tracks, dict):
+                tracks = [tracks]
+            result = []
+            for t in (tracks or []):
+                name = t.get("name", "")
+                artist_obj = t.get("artist", {})
+                artist = artist_obj.get("name", "") if isinstance(artist_obj, dict) else str(artist_obj)
+                if name and artist:
+                    result.append({"name": name, "artist": artist, "type": "track", "cover_url": ""})
+            return result
+        except Exception as e:
+            logger.warning("Failed to get global chart: %s", e)
+            return []
+
+    def get_geo_top_tracks(self, country: str = "United Kingdom", limit: int = 50) -> list[dict]:
+        """Get top tracks for a country using geo.getTopTracks (no auth required)."""
+        params = {
+            "method": "geo.getTopTracks",
+            "country": country,
+            "api_key": self.api_key,
+            "format": "json",
+            "limit": limit,
+        }
+        try:
+            resp = requests.get("https://ws.audioscrobbler.com/2.0/", params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            tracks = data.get("tracks", {}).get("track", [])
+            if isinstance(tracks, dict):
+                tracks = [tracks]
+            result = []
+            for t in (tracks or []):
+                name = t.get("name", "")
+                artist_obj = t.get("artist", {})
+                artist = artist_obj.get("name", "") if isinstance(artist_obj, dict) else str(artist_obj)
+                if name and artist:
+                    result.append({"name": name, "artist": artist, "type": "track", "cover_url": ""})
+            return result
+        except Exception as e:
+            logger.warning("Failed to get geo chart (%s): %s", country, e)
+            return []
+
+
 def summarize(tracks: Iterable[Track]) -> str:
     lines = [f"{t.artist} — {t.title}" for t in tracks]
     return "\n".join(lines)

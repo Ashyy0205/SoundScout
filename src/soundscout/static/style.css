@@ -895,6 +895,117 @@ a { color: inherit; text-decoration: none; }
 
 .results-container.tracks-list-container { display: block; }
 
+/* Home shelves override — block layout so each shelf row stacks vertically */
+.home-shelves-container { display: block; }
+
+/* =========================================================
+   HOME SHELVES (horizontal scrolling rows)
+   ========================================================= */
+.home-shelf {
+  margin-bottom: 28px;
+}
+
+.shelf-title {
+  font-family: var(--font-ui);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.82rem;
+  color: var(--accent-primary);
+  margin-bottom: 12px;
+  padding-left: 2px;
+}
+
+.shelf-track {
+  display: flex;
+  flex-direction: row;
+  gap: 14px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 10px;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.shelf-track::-webkit-scrollbar { display: none; }
+
+.shelf-track .result-card {
+  flex: 0 0 180px;
+  width: 180px;
+  scroll-snap-align: start;
+}
+
+.empty-state {
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 0.88rem;
+  text-align: center;
+  padding: 48px 16px;
+  letter-spacing: 0.06em;
+}
+
+/* =========================================================
+   COVER STATUS BADGE (replaces download button in cards)
+   ========================================================= */
+.cover-status-badge {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(2, 215, 242, 0.88);
+  color: #040e14;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.50);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+  z-index: 3;
+}
+
+.cover-status-badge::after { content: '↓'; }
+
+.cover-status-badge.badge-in-library {
+  background: var(--success);
+  cursor: default;
+}
+.cover-status-badge.badge-in-library::after { content: '✓'; }
+
+.cover-status-badge.badge-partial {
+  background: #f0b429;
+  color: #0a0a0a;
+}
+.cover-status-badge.badge-partial::after { content: '↓'; }
+
+.cover-status-badge.badge-downloading {
+  background: rgba(2, 215, 242, 0.75);
+  cursor: wait;
+  animation: pulse-badge 1s ease-in-out infinite;
+}
+.cover-status-badge.badge-downloading::after { content: '…'; font-size: 11px; letter-spacing: -1px; }
+
+.cover-status-badge.badge-error {
+  background: var(--error);
+  color: #fff;
+}
+.cover-status-badge.badge-error::after { content: '✗'; font-size: 11px; }
+
+.cover-status-badge:not(.badge-in-library):not(.badge-downloading):hover {
+  transform: scale(1.15);
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.55);
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
 .result-card {
   display: flex;
   flex-direction: column;
@@ -4117,6 +4228,29 @@ body:not(.playerbar-visible) .container {
     padding: 0.12rem 0.4rem;
     font-size: 0.56rem;
     letter-spacing: 0.03em;
+  }
+
+  /* Home shelves: narrower cards on small screens */
+  body.is-mobile-webui .shelf-track .result-card {
+    flex: 0 0 140px;
+    width: 140px;
+  }
+
+  body.is-mobile-webui .shelf-track {
+    gap: 10px;
+  }
+
+  body.is-mobile-webui .home-shelf {
+    margin-bottom: 20px;
+  }
+
+  /* Badge: slightly smaller on smallest screens */
+  body.is-mobile-webui .cover-status-badge {
+    width: 22px;
+    height: 22px;
+    font-size: 11px;
+    bottom: 6px;
+    left: 6px;
   }
 }
 

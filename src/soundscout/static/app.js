@@ -650,7 +650,28 @@ function updateButtonsFromJobs(jobs) {
         if (!id) continue;
         const status = String(job.status || '').toLowerCase();
         const esc = (window.CSS && typeof window.CSS.escape === 'function') ? window.CSS.escape(id) : id.replace(/"/g, '\\"');
-        const buttons = document.querySelectorAll(`.download-btn[data-download-job-id=\"${esc}\"]`);
+
+        // Cover status badges (cards grid)
+        const badges = document.querySelectorAll(`.cover-status-badge[data-download-job-id="${esc}"]`);
+        badges.forEach((badge) => {
+            if (!badge) return;
+            badge.classList.remove('badge-downloading', 'badge-error');
+            if (status === 'completed') {
+                badge.classList.add('badge-in-library');
+                badge.disabled = true;
+                badge.title = 'In Library';
+                badge.setAttribute('aria-label', 'In Library');
+            } else if (status === 'failed' || status === 'partial') {
+                badge.classList.add('badge-error');
+                badge.disabled = false;
+            } else if (status === 'running' || status === 'queued') {
+                badge.classList.add('badge-downloading');
+                badge.disabled = true;
+            }
+        });
+
+        // Classic text download buttons (track list rows in album/artist views)
+        const buttons = document.querySelectorAll(`.download-btn[data-download-job-id="${esc}"]`);
         if (!buttons || buttons.length === 0) continue;
 
         buttons.forEach((btn) => {
@@ -1092,14 +1113,14 @@ async function openHomeRecommendations(force) {
 
     // Serve from the JS-level cache when navigating back to this view.
     if (!force) {
-        const cached = _cacheGet('recommendations');
+        const cached = _cacheGet('home');
         if (cached) {
             const token = beginView('home');
             const resultsContainer = document.getElementById('resultsContainer');
             if (resultsContainer) resultsContainer.innerHTML = '';
             setLoading(false);
             setViewHeader(`
-                <div class="view-title">For You — Recommendations</div>
+                <div class="view-title">Home</div>
             `);
             renderHomeView(cached);
             homeLoadedOnce = true;
@@ -1111,35 +1132,68 @@ async function openHomeRecommendations(force) {
 
     const resultsContainer = document.getElementById('resultsContainer');
     if (resultsContainer) resultsContainer.innerHTML = '';
-    setLoading(true, 'Loading recommendations…');
+    setLoading(true, 'Loading…');
     setViewHeader(`
-        <div class="view-title">For You — Recommendations</div>
+        <div class="view-title">Home</div>
     `);
 
     try {
-        // Append bust=1 on forced refresh so the server also regenerates the feed.
-        const url = force ? '/api/recommendations?limit=200&bust=1' : '/api/recommendations?limit=200';
+        const url = force ? '/api/home?bust=1' : '/api/home';
         const data = await apiFetchJson(url);
         if (!isActiveView('home', token)) return;
         setLoading(false);
-        const items = (data && data.items) ? data.items : [];
-        const state = { items };
-        _cacheSet('recommendations', state);
+        const shelves = (data && data.shelves) ? data.shelves : [];
+        const state = { shelves };
+        _cacheSet('home', state);
         renderHomeView(state);
         homeLoadedOnce = true;
     } catch (e) {
         if (!isActiveView('home', token)) return;
         setLoading(false);
-        // If Last.fm isn't linked/configured, keep the UI usable.
-        showError('Failed to load recommendations. Link Last.fm in Settings.');
-        console.error('Recommendations error:', e);
+        showError('Failed to load home. Check your Last.fm settings.');
+        console.error('Home error:', e);
     }
+}
+
+function renderShelf(shelf) {
+    const section = document.createElement('div');
+    section.className = 'home-shelf';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'shelf-title';
+    titleEl.textContent = shelf.title || '';
+    section.appendChild(titleEl);
+
+    const track = document.createElement('div');
+    track.className = 'shelf-track';
+
+    (shelf.items || []).forEach(item => {
+        track.appendChild(createResultCard(item, 'track'));
+    });
+
+    section.appendChild(track);
+    return section;
 }
 
 function renderHomeView(state) {
     currentView = { kind: 'home', state };
-    setResultsMode('grid');
-    displayResults((state && state.items) ? state.items : [], 'track');
+    const resultsContainer = document.getElementById('resultsContainer');
+    if (!resultsContainer) return;
+    resultsContainer.innerHTML = '';
+    resultsContainer.classList.remove('tracks-list-container');
+    resultsContainer.classList.add('home-shelves-container');
+
+    const shelves = (state && state.shelves) ? state.shelves : [];
+    if (shelves.length === 0) {
+        resultsContainer.innerHTML = '<div class="empty-state">No content available. Connect Last.fm in Settings.</div>';
+        return;
+    }
+
+    shelves.forEach(shelf => {
+        resultsContainer.appendChild(renderShelf(shelf));
+    });
+
+    initLazyCoverObserver();
 }
 
 function setActiveNav(which) {
@@ -1875,15 +1929,21 @@ async function hydrateLibraryAlbumCompleteness(items) {
                     const ct = card.dataset.itemTitle || '';
                     if (ca !== artist || ct !== album) return;
 
-                    const imgContainer = card.querySelector('.card-image-container');
-                    if (!imgContainer) return;
-                    const existing = imgContainer.querySelector('.library-badge');
-                    if (existing) existing.remove();
-
-                    const badge = document.createElement('span');
-                    badge.className = 'library-badge' + (isComplete ? '' : ' is-incomplete');
-                    badge.textContent = isComplete ? '✓' : '–';
-                    imgContainer.appendChild(badge);
+                    const badge = card.querySelector('.cover-status-badge');
+                    if (!badge) return;
+                    if (isComplete) {
+                        badge.classList.add('badge-in-library');
+                        badge.classList.remove('badge-partial', 'badge-downloading', 'badge-error');
+                        badge.disabled = true;
+                        badge.title = 'In Library';
+                        badge.setAttribute('aria-label', 'In Library');
+                    } else {
+                        badge.classList.add('badge-partial');
+                        badge.classList.remove('badge-in-library', 'badge-downloading', 'badge-error');
+                        badge.disabled = false;
+                        badge.title = 'Download Missing';
+                        badge.setAttribute('aria-label', 'Download Missing');
+                    }
                 });
             } catch (e) {
                 // If album/status can't be computed (e.g. LASTFM_API_KEY missing), leave dash.
@@ -2120,7 +2180,7 @@ function renderAlbumView(state) {
 function setResultsMode(mode) {
     const resultsContainer = document.getElementById('resultsContainer');
     if (!resultsContainer) return;
-    resultsContainer.classList.remove('tracks-list-container');
+    resultsContainer.classList.remove('tracks-list-container', 'home-shelves-container');
     if (mode === 'list') {
         resultsContainer.classList.add('tracks-list-container');
     }
@@ -2259,8 +2319,8 @@ function initLazyCoverObserver() {
             });
         }, {
             root: null,
-            // Start fetching slightly before it scrolls into view.
-            rootMargin: '220px 0px',
+            // Start fetching before scrolling into view — include horizontal margin for shelf rows.
+            rootMargin: '220px 400px',
             threshold: 0.01
         });
 
@@ -2370,11 +2430,8 @@ function createResultCard(item, type) {
     const itemType = item.type ? item.type.toUpperCase() : (type ? type.toUpperCase() : 'TRACK');
     const inLibrary = !!item.in_library;
     const libraryOwned = !!item.library_owned;
+    const partial = !!item.partial;
     const complete = item.complete === true;
-
-    const showCompleteTick = inLibrary || complete;
-    // For the Library tab, show a dash until we can prove it's complete.
-    const showIncompleteDash = !showCompleteTick && libraryOwned;
 
     card.dataset.itemType = normalizedType;
     card.dataset.itemArtist = artist;
@@ -2390,12 +2447,28 @@ function createResultCard(item, type) {
         ? `data-lazy-cover-endpoint="${lazyCoverEndpoint}" data-lazy-cover-loaded="0" data-lazy-cover-artist="${escHtml(artist)}"`
         : '';
 
+    // Determine status badge state
+    let badgeClass = 'cover-status-badge';
+    let badgeDisabled = '';
+    let badgeTitle = 'Download';
+    if (!isArtist) {
+        if (inLibrary || complete) {
+            badgeClass += ' badge-in-library';
+            badgeDisabled = ' disabled';
+            badgeTitle = 'In Library';
+        } else if ((partial && normalizedType === 'album') || (libraryOwned && normalizedType === 'album')) {
+            // Album folder exists but might be incomplete
+            badgeClass += ' badge-partial';
+            badgeTitle = 'Download Missing';
+        }
+    }
+
     card.innerHTML = `
         <div class="card-image-container">
             <img
                 class="cover-art${isArtist ? ' artist-avatar' : ''}${lazyCoverEndpoint ? ' lazy-cover' : ''}"
                 src="${coverUrl}"
-                alt="${title}"
+                alt="${escHtml(title)}"
                 data-proxy-src="${proxyUrl}"
                 data-fallback-src="${fallbackCover}"
                 data-tried-proxy="0"
@@ -2403,16 +2476,13 @@ function createResultCard(item, type) {
                 onerror="handleImgError(this)"
             >
             <span class="type-badge">${itemType}</span>
-            ${showCompleteTick ? '<span class="library-badge">✓</span>' : (showIncompleteDash ? '<span class="library-badge is-incomplete">–</span>' : '')}
+            ${!isArtist ? `<button class="${badgeClass}"${badgeDisabled} title="${badgeTitle}" aria-label="${badgeTitle}"></button>` : ''}
             ${normalizedType === 'track' ? '<button class="preview-btn preview-overlay-btn" data-state="play" aria-label="Play preview" title="Play preview"></button>' : ''}
         </div>
         <div class="card-content">
             <div class="track-title">${escapeHtml(title)}</div>
             <div class="track-artist">${escapeHtml(artist)}</div>
             ${album ? `<div class="track-album">${escapeHtml(album)}</div>` : ''}
-            <div class="card-actions">
-                <button class="download-btn">Download</button>
-            </div>
         </div>
     `;
 
@@ -2425,21 +2495,14 @@ function createResultCard(item, type) {
         });
     }
 
-    const btn = card.querySelector('.download-btn');
-    if (btn) {
-        if ((inLibrary || (libraryOwned && normalizedType === 'album')) && normalizedType !== 'artist') {
-            btn.disabled = true;
-            btn.textContent = 'In Library';
-            btn.classList.add('success');
-        }
+    const btn = card.querySelector('.cover-status-badge');
+    if (btn && !isArtist) {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (btn.disabled) return;
             const t = normalizedType;
             if (t === 'album') {
                 downloadItem(artist, title, 'album', btn);
-            } else if (t === 'artist') {
-                downloadItem(artist, artist, 'artist', btn);
             } else {
                 downloadItem(artist, title, 'track', btn);
             }
@@ -2496,19 +2559,13 @@ async function hydrateAlbumStatuses(items) {
                         if (ca === artist && ct === album) {
                             card.dataset.inLibrary = '1';
 
-                            const imgContainer = card.querySelector('.card-image-container');
-                            if (imgContainer && !imgContainer.querySelector('.library-badge')) {
-                                const badge = document.createElement('span');
-                                badge.className = 'library-badge';
-                                badge.textContent = '✓';
-                                imgContainer.appendChild(badge);
-                            }
-
-                            const btn = card.querySelector('.download-btn');
-                            if (btn) {
-                                btn.disabled = true;
-                                btn.textContent = '✓ In Library';
-                                btn.classList.add('success');
+                            const badge = card.querySelector('.cover-status-badge');
+                            if (badge) {
+                                badge.classList.add('badge-in-library');
+                                badge.classList.remove('badge-partial', 'badge-downloading', 'badge-error');
+                                badge.disabled = true;
+                                badge.title = 'In Library';
+                                badge.setAttribute('aria-label', 'In Library');
                             }
                         }
                     });
@@ -2549,13 +2606,23 @@ function isLastFmPlaceholder(url) {
 }
 
 async function downloadItem(artist, title, type, buttonElement) {
-    if (buttonElement && buttonElement.disabled && (buttonElement.textContent || '').includes('In Library')) {
-        return;
+    const isBadge = buttonElement && buttonElement.classList.contains('cover-status-badge');
+
+    if (buttonElement && buttonElement.disabled) {
+        // Allow retrying errors on badges; block if truly in-library
+        if (isBadge && buttonElement.classList.contains('badge-in-library')) return;
+        if (!isBadge && (buttonElement.textContent || '').includes('In Library')) return;
     }
+
     // Disable button
     buttonElement.disabled = true;
-    buttonElement.textContent = 'Queued…';
-    buttonElement.classList.add('downloading');
+    if (isBadge) {
+        buttonElement.classList.remove('badge-partial', 'badge-error');
+        buttonElement.classList.add('badge-downloading');
+    } else {
+        buttonElement.textContent = 'Queued…';
+        buttonElement.classList.add('downloading');
+    }
 
     const downloadData = {
         artist: artist,
@@ -2574,20 +2641,58 @@ async function downloadItem(artist, title, type, buttonElement) {
 
         if (result.success) {
             if (result.already_in_library) {
-                buttonElement.textContent = '✓ In Library';
-                buttonElement.classList.remove('downloading');
-                buttonElement.classList.add('success');
+                if (isBadge) {
+                    buttonElement.classList.remove('badge-downloading');
+                    buttonElement.classList.add('badge-in-library');
+                    buttonElement.title = 'In Library';
+                    buttonElement.setAttribute('aria-label', 'In Library');
+                } else {
+                    buttonElement.textContent = '✓ In Library';
+                    buttonElement.classList.remove('downloading');
+                    buttonElement.classList.add('success');
+                }
             } else {
                 const jobId = result.download_id;
                 if (jobId) {
                     buttonElement.dataset.downloadJobId = String(jobId);
                 }
-                buttonElement.textContent = 'In Queue…';
+                if (!isBadge) {
+                    buttonElement.textContent = 'In Queue…';
+                }
                 // Keep disabled; the poller will flip it when done.
             }
             pollDownloadsOnce();
         } else {
-            buttonElement.textContent = '✗ Failed';
+            if (isBadge) {
+                buttonElement.classList.remove('badge-downloading');
+                buttonElement.classList.add('badge-error');
+                buttonElement.disabled = false;
+                setTimeout(() => {
+                    buttonElement.classList.remove('badge-error');
+                }, 3000);
+            } else {
+                buttonElement.textContent = '✗ Failed';
+                buttonElement.classList.remove('downloading');
+                buttonElement.classList.add('error');
+                buttonElement.disabled = false;
+                setTimeout(() => {
+                    buttonElement.textContent = 'Retry Download';
+                    buttonElement.classList.remove('error');
+                }, 3000);
+            }
+        }
+
+    } catch (error) {
+        console.error('Download error:', error);
+        if (isBadge) {
+            buttonElement.classList.remove('badge-downloading');
+            buttonElement.classList.add('badge-error');
+            buttonElement.disabled = false;
+            setTimeout(() => {
+                buttonElement.classList.remove('badge-error');
+            }, 3000);
+        } else {
+            buttonElement.textContent = '✗ Error';
             buttonElement.classList.remove('downloading');
             buttonElement.classList.add('error');
             buttonElement.disabled = false;
@@ -2596,17 +2701,6 @@ async function downloadItem(artist, title, type, buttonElement) {
                 buttonElement.classList.remove('error');
             }, 3000);
         }
-
-    } catch (error) {
-        console.error('Download error:', error);
-        buttonElement.textContent = '✗ Error';
-        buttonElement.classList.remove('downloading');
-        buttonElement.classList.add('error');
-        buttonElement.disabled = false;
-        setTimeout(() => {
-            buttonElement.textContent = 'Retry Download';
-            buttonElement.classList.remove('error');
-        }, 3000);
     }
 }
 
