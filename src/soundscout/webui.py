@@ -2766,7 +2766,7 @@ def _scraper_base_cmd() -> list[str]:
 def _build_scraper_cmd(csv_path: str) -> list[str]:
     return (
         _scraper_base_cmd()
-        + ["--csv", csv_path, "--service", SERVICE, "--output", str(MUSIC_LIBRARY_PATH)]
+        + ["--csv", csv_path, "--output", str(MUSIC_LIBRARY_PATH)]
     )
 
 
