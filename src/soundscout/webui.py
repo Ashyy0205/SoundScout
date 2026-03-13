@@ -1703,6 +1703,10 @@ _PLEX_COVER_CACHE_TTL_SECONDS = 60 * 60
 _plex_cover_cache: dict[str, tuple[float, str]] = {}
 _PLEX_COVER_CACHE_MAX = 2048
 
+_ALBUM_COVER_EXT_CACHE_TTL_SECONDS = 60 * 60
+_album_cover_ext_cache: dict[str, tuple[float, str]] = {}  # key -> (ts, url)
+_ALBUM_COVER_EXT_CACHE_MAX = 2048
+
 _TRACK_COVER_CACHE_TTL_SECONDS = 60 * 60
 _track_cover_cache: dict[str, tuple[float, str, str]] = {}  # key -> (ts, url, album_name)
 _TRACK_COVER_CACHE_MAX = 2048
@@ -2098,7 +2102,7 @@ def library_cover():
 
 @app.route("/api/library/plex/album_cover", methods=["GET"])
 def plex_album_cover():
-    """Proxy an album cover from Plex without exposing tokens to the client.
+    """Proxy an album cover, trying Plex first then iTunes/Spotify as fallbacks.
 
     Query params:
         artist: album artist name
@@ -2111,10 +2115,7 @@ def plex_album_cover():
     if not artist or not album:
         return jsonify({"error": "Missing artist or album parameter"}), 400
 
-    # Use the current session's token for cover proxy.
     token = (session.get("plex_token") or "").strip()
-    if not token or not PLEX_BASEURL:
-        return jsonify({"error": "Plex not configured"}), 500
 
     try:
         w = int(request.args.get("w", 420))
@@ -2124,46 +2125,65 @@ def plex_album_cover():
     w = max(64, min(w, 1200))
     h = max(64, min(h, 1200))
 
-    ca = _clean_lookup_text(artist)
-    cal = _strip_redundant_artist_prefix(ca, album)
+    # --- Source 1: Plex ---
+    if token and PLEX_BASEURL:
+        ca = _clean_lookup_text(artist)
+        cal = _strip_redundant_artist_prefix(ca, album)
 
-    thumb = _plex_find_album_thumb(ca or artist, cal or album)
-    if not thumb:
-        thumb = _plex_find_album_thumb(artist, album)
-    if not thumb:
-        return jsonify({"error": "Not found"}), 404
+        thumb = _plex_find_album_thumb(ca or artist, cal or album)
+        if not thumb:
+            thumb = _plex_find_album_thumb(artist, album)
 
-    # Use Plex's photo transcode endpoint for consistent sizing.
-    # It expects a URL-encoded 'url' parameter pointing to the image path.
-    transcode_path = "/photo/:/transcode"
-    try:
-        resp = requests.get(
-            f"{PLEX_BASEURL}{transcode_path}",
-            params={
-                "url": thumb,
-                "width": str(w),
-                "height": str(h),
-                "minSize": "1",
-                "upscale": "1",
-                "X-Plex-Token": token,
-            },
-            headers={"Accept": "image/*", "X-Plex-Client-Identifier": PLEX_OAUTH_CLIENT_ID},
-            timeout=15,
-            stream=True,
-            verify=PLEX_VERIFY_SSL,
-        )
-        if resp.status_code != 200:
-            return jsonify({"error": "Plex fetch failed", "status": resp.status_code}), 502
+        if thumb:
+            transcode_path = "/photo/:/transcode"
+            try:
+                resp = requests.get(
+                    f"{PLEX_BASEURL}{transcode_path}",
+                    params={
+                        "url": thumb,
+                        "width": str(w),
+                        "height": str(h),
+                        "minSize": "1",
+                        "upscale": "1",
+                        "X-Plex-Token": token,
+                    },
+                    headers={"Accept": "image/*", "X-Plex-Client-Identifier": PLEX_OAUTH_CLIENT_ID},
+                    timeout=15,
+                    stream=True,
+                    verify=PLEX_VERIFY_SSL,
+                )
+                if resp.status_code == 200:
+                    content_type = resp.headers.get("Content-Type", "image/jpeg")
+                    return Response(
+                        resp.content,
+                        status=200,
+                        content_type=content_type,
+                        headers={"Cache-Control": "public, max-age=86400"},
+                    )
+            except Exception:
+                pass
 
-        content_type = resp.headers.get("Content-Type", "image/jpeg")
-        return Response(
-            resp.content,
-            status=200,
-            content_type=content_type,
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
-    except Exception as e:
-        return jsonify({"error": f"Plex fetch error: {e}"}), 502
+    # --- Sources 2 & 3: iTunes → Spotify ---
+    fallback_url = _get_album_cover_url_external(artist, album)
+    if fallback_url:
+        try:
+            resp = requests.get(
+                fallback_url,
+                timeout=10,
+                headers={"User-Agent": "SoundScout/1.0"},
+            )
+            if resp.status_code == 200:
+                content_type = resp.headers.get("Content-Type", "image/jpeg")
+                return Response(
+                    resp.content,
+                    status=200,
+                    content_type=content_type,
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+        except Exception:
+            pass
+
+    return jsonify({"error": "Not found"}), 404
 
 
 @app.route("/api/library/album/local_tracks", methods=["GET"])
@@ -2729,6 +2749,76 @@ def _itunes_track_cover_url(artist: str, title: str) -> str:
         return art
     except Exception:
         return ""
+
+
+def _itunes_album_cover_url(artist: str, album: str) -> str:
+    """Return an iTunes artwork URL for an album, or '' on any failure."""
+    a = (artist or "").strip()
+    al = (album or "").strip()
+    if not a or not al:
+        return ""
+    try:
+        from urllib.parse import quote as _quote
+        q = _quote(f"{a} {al}")
+        resp = requests.get(
+            f"https://itunes.apple.com/search?term={q}&entity=album&limit=5&media=music",
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return ""
+        results = resp.json().get("results") or []
+        if not results:
+            return ""
+        art = results[0].get("artworkUrl100") or ""
+        if art and ".gif" not in art.lower():
+            art = art.replace("100x100bb.jpg", "3000x3000bb.jpg") \
+                     .replace("100x100bb.png", "3000x3000bb.png")
+        elif ".gif" in art.lower():
+            art = ""
+        return art
+    except Exception:
+        return ""
+
+
+def _get_album_cover_url_external(artist: str, album: str) -> str:
+    """Return an external cover URL for an album (iTunes → Spotify), with caching."""
+    a = (artist or "").strip()
+    al = (album or "").strip()
+    if not a or not al:
+        return ""
+
+    cache_key = f"{a.lower()}|||{al.lower()}"
+    now = time.time()
+    cached = _album_cover_ext_cache.get(cache_key)
+    if cached and (now - cached[0]) < _ALBUM_COVER_EXT_CACHE_TTL_SECONDS:
+        return cached[1] or ""
+
+    url = ""
+
+    # Source 1: iTunes
+    try:
+        url = _itunes_album_cover_url(a, al)
+    except Exception:
+        pass
+
+    # Source 2: Spotify
+    if not url:
+        try:
+            cid = _builtin_spotify_client_id()
+            if cid:
+                _sp = SpotifyClient(client_id=cid, client_secret="")
+                url = _sp.get_album_cover_url(a, al)
+        except Exception:
+            pass
+
+    # Evict oldest quarter when at capacity
+    if len(_album_cover_ext_cache) >= _ALBUM_COVER_EXT_CACHE_MAX:
+        oldest = sorted(_album_cover_ext_cache.items(), key=lambda kv: kv[1][0])[: max(1, _ALBUM_COVER_EXT_CACHE_MAX // 4)]
+        for k, _ in oldest:
+            _album_cover_ext_cache.pop(k, None)
+
+    _album_cover_ext_cache[cache_key] = (now, url)
+    return url
 
 
 def _lastfm_track_cover_info(artist: str, title: str) -> tuple[str, str]:
