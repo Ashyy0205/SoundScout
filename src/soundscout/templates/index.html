@@ -64,6 +64,45 @@
   </div>
 
   <!-- =========================
+       LAST.FM CONNECT POPUP
+       ========================= -->
+  <div id="plexLastfmModal"
+       class="plex-lastfm-overlay"
+       style="display: none;"
+       role="dialog"
+       aria-modal="true"
+       aria-labelledby="plexLastfmTitle">
+    <div class="plex-lastfm-modal">
+      <button id="plexLastfmCloseBtn"
+              class="plex-lastfm-close"
+              type="button"
+              aria-label="Close popup">
+        ×
+      </button>
+
+      <h3 id="plexLastfmTitle">Connect Plex to Last.fm</h3>
+      <p class="plex-lastfm-subtitle">
+        Last.fm username saved. Finish setup in Plex so your listening can scrobble.
+      </p>
+      <p class="plex-lastfm-path">Plex: Settings -> Other Services -> Last.fm</p>
+
+      <div class="plex-lastfm-actions">
+        <a class="nav-btn nav-btn-primary"
+           href="https://plex.tv/users/other-services"
+           target="_blank"
+           rel="noopener noreferrer">
+          Open Plex Services
+        </a>
+        <button id="plexLastfmNotNowBtn"
+                class="nav-btn"
+                type="button">
+          Not now
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================
        APP HEADER
        ========================= -->
   <header class="app-header">

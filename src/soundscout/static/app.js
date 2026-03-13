@@ -168,6 +168,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateBodyViewVariant(currentView.kind);
     updateTopbarVisibility();
     window.addEventListener('resize', updateViewportVariantClass);
+    initPlexLastfmModal();
 
     // Render Lucide icons in the bottom nav
     if (typeof lucide !== 'undefined') lucide.createIcons();
@@ -347,6 +348,9 @@ async function linkLastfmByUsername() {
         });
         await initLastfm();
         openSettings();
+        if (lastfmLinked) {
+            setPlexLastfmModalVisible(true);
+        }
         // Refresh recommendations if user is on home.
         if (currentView && currentView.kind === 'home') {
             openHomeRecommendations(true);
@@ -365,6 +369,38 @@ async function unlinkLastfm() {
     await initLastfm();
     if (currentView && currentView.kind === 'settings') {
         openSettings();
+    }
+}
+
+function setPlexLastfmModalVisible(visible) {
+    const modal = document.getElementById('plexLastfmModal');
+    if (!modal) return;
+    modal.style.display = visible ? 'flex' : 'none';
+}
+
+function initPlexLastfmModal() {
+    const modal = document.getElementById('plexLastfmModal');
+    const closeBtn = document.getElementById('plexLastfmCloseBtn');
+    const notNowBtn = document.getElementById('plexLastfmNotNowBtn');
+    if (!modal) return;
+
+    if (closeBtn && !closeBtn.dataset.bound) {
+        closeBtn.dataset.bound = '1';
+        closeBtn.addEventListener('click', () => setPlexLastfmModalVisible(false));
+    }
+
+    if (notNowBtn && !notNowBtn.dataset.bound) {
+        notNowBtn.dataset.bound = '1';
+        notNowBtn.addEventListener('click', () => setPlexLastfmModalVisible(false));
+    }
+
+    if (!modal.dataset.bound) {
+        modal.dataset.bound = '1';
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                setPlexLastfmModalVisible(false);
+            }
+        });
     }
 }
 
@@ -452,26 +488,6 @@ async function openSettings() {
         ? `<button class="nav-btn" type="button" onclick="unlinkLastfm()">Unlink Last.fm</button>`
         : '';
 
-    const plexConnectPrompt = lastfmLinked
-        ? `
-            <div class="settings-plex-connect-card">
-                <div class="settings-plex-connect-title">Connect Plex to Last.fm</div>
-                <div class="settings-plex-connect-sub">
-                    Finish setup in Plex so your listening activity can scrobble to Last.fm.
-                </div>
-                <div class="settings-plex-connect-meta">Plex: Settings -> Other Services -> Last.fm</div>
-                <div class="settings-plex-connect-actions">
-                    <a class="nav-btn nav-btn-primary"
-                       href="https://plex.tv/users/other-services"
-                       target="_blank"
-                       rel="noopener noreferrer">
-                        Open Plex Services
-                    </a>
-                </div>
-            </div>
-        `
-        : '';
-
     const adLinked = autodisc ? !!autodisc.linked_lastfm : !!lastfmLinked;
     const adEnabled = autodisc ? !!autodisc.enabled : false;
     const adWeekday = autodisc ? Number(autodisc.weekday) : 0;
@@ -500,7 +516,6 @@ async function openSettings() {
           <div class="downloads-now-sub">${linkedText}</div>
           ${usernameLinkControls}
           <div class="settings-actions-row">${unlinkButton}</div>
-                    ${plexConnectPrompt}
         </div>
       </div>
 
