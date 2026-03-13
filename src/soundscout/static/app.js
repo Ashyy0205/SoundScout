@@ -2917,10 +2917,15 @@ function _renderScoutIdle(token) {
             <button class="scout-btn" id="scoutBtn" type="button"
                     aria-label="Tap to identify song"
                     onclick="scoutButtonTap()">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                <path d="M9 9a3 3 0 1 1 6 0c0 1.5-.8 2.8-2 3.5V15"/>
-                <line x1="12" y1="19" x2="12" y2="19.01"/>
-                <circle cx="12" cy="12" r="10"/>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/>
+                <path d="M4 6h.01"/>
+                <path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/>
+                <path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/>
+                <path d="M12 18h.01"/>
+                <path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/>
+                <circle cx="12" cy="12" r="2"/>
+                <path d="m13.41 10.59 5.66-5.66"/>
               </svg>
             </button>
           </div>
