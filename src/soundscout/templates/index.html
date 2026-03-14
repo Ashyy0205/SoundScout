@@ -343,7 +343,7 @@
               aria-label="Close">×</button>
 
       <div class="monitor-modal-header">
-        <div class="monitor-modal-icon">🔖</div>
+        <div class="monitor-modal-icon"><i data-lucide="bookmark"></i></div>
         <div>
           <div id="monitorModalTitle" class="monitor-modal-title">Monitor Artist</div>
           <div id="monitorModalArtist" class="monitor-modal-artist"></div>
@@ -355,21 +355,21 @@
         <p class="monitor-modal-desc">Choose what to download:</p>
         <div class="monitor-modal-options">
           <button class="monitor-option" type="button" onclick="confirmMonitor('all')">
-            <div class="monitor-option-icon">⬇</div>
+            <div class="monitor-option-icon"><i data-lucide="download"></i></div>
             <div class="monitor-option-body">
               <div class="monitor-option-label">All releases</div>
               <div class="monitor-option-desc">Download full discography + every future release</div>
             </div>
           </button>
           <button class="monitor-option" type="button" onclick="confirmMonitor('future')">
-            <div class="monitor-option-icon">🔔</div>
+            <div class="monitor-option-icon"><i data-lucide="bell"></i></div>
             <div class="monitor-option-body">
               <div class="monitor-option-label">Future only</div>
               <div class="monitor-option-desc">Skip existing, auto-download new releases as they drop</div>
             </div>
           </button>
           <button class="monitor-option" type="button" onclick="confirmMonitor('existing')">
-            <div class="monitor-option-icon">📚</div>
+            <div class="monitor-option-icon"><i data-lucide="library"></i></div>
             <div class="monitor-option-body">
               <div class="monitor-option-label">Existing only</div>
               <div class="monitor-option-desc">Download current discography once, no future tracking</div>

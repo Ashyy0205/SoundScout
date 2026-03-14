@@ -4974,6 +4974,26 @@ body.view-scout .results-container {
   transform: scale(1.15);
 }
 
+/* Lucide SVG sizing inside monitor elements */
+.monitor-modal-icon svg {
+  width: 28px;
+  height: 28px;
+  stroke: var(--accent-scan, #02D7F2);
+}
+.monitor-option-icon svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+.monitor-header-btn svg {
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+  margin-right: 2px;
+  position: relative;
+  top: -1px;
+}
+
 /* Header button state */
 .monitor-header-btn.is-monitored {
   background: rgba(255, 211, 0, 0.15);

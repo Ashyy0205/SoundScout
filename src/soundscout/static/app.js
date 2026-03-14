@@ -1842,7 +1842,8 @@ function _refreshMonitorButtons(artistName, isMonitored) {
         const hBtn = document.querySelector('.monitor-header-btn');
         if (hBtn) {
             hBtn.classList.toggle('is-monitored', isMonitored);
-            hBtn.textContent = isMonitored ? '\uD83D\uDD16 Monitored' : '\uD83D\uDD16 Monitor';
+            hBtn.innerHTML = `<i data-lucide="bookmark"></i> ${isMonitored ? 'Monitored' : 'Monitor'}`;
+            if (typeof lucide !== 'undefined') lucide.createIcons();
         }
     }
 }
@@ -1996,6 +1997,7 @@ function setViewHeader(html) {
     }
     header.innerHTML = html;
     header.style.display = 'flex';
+    if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 function pushView() {
@@ -2214,7 +2216,7 @@ async function openArtist(artistName) {
         <button class="nav-btn" onclick="goBack()">← Back</button>
         <div class="view-title">${escapeHtml(artistName)}</div>
         <div class="view-actions">
-            <button class="nav-btn monitor-header-btn${isMonArtist ? ' is-monitored' : ''}" onclick="openMonitorModal('${escapeJsString(artistName)}')">🔖 ${isMonArtist ? 'Monitored' : 'Monitor'}</button>
+            <button class="nav-btn monitor-header-btn${isMonArtist ? ' is-monitored' : ''}" onclick="openMonitorModal('${escapeJsString(artistName)}')"><i data-lucide="bookmark"></i> ${isMonArtist ? 'Monitored' : 'Monitor'}</button>
             <button class="nav-btn" onclick="downloadItem('${escapeJsString(artistName)}', '${escapeJsString(artistName)}', 'artist', this)">${downloadLabel}</button>
         </div>
     `);
@@ -2256,7 +2258,7 @@ function renderArtistView(state) {
         <button class="nav-btn" onclick="goBack()">← Back</button>
         <div class="view-title">${escapeHtml(state.artist)}</div>
         <div class="view-actions">
-            <button class="nav-btn monitor-header-btn${isMonArtist ? ' is-monitored' : ''}" onclick="openMonitorModal('${escapeJsString(state.artist)}')">🔖 ${isMonArtist ? 'Monitored' : 'Monitor'}</button>
+            <button class="nav-btn monitor-header-btn${isMonArtist ? ' is-monitored' : ''}" onclick="openMonitorModal('${escapeJsString(state.artist)}')"><i data-lucide="bookmark"></i> ${isMonArtist ? 'Monitored' : 'Monitor'}</button>
             <button class="nav-btn" onclick="downloadItem('${escapeJsString(state.artist)}', '${escapeJsString(state.artist)}', 'artist', this)">${downloadLabel}</button>
         </div>
     `);

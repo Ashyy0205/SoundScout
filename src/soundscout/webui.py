@@ -5027,6 +5027,8 @@ def monitor_add_artist():
     known_albums: list[str] = []
     pending_tracks: list[dict] = []
     seen_keys: set[str] = set()
+    # Tracks grouped per album for per-album batch jobs: list of (album_name, [(artist, title), ...])
+    albums_to_queue: list[tuple[str, list[tuple[str, str]]]] = []
 
     try:
         lfm = LastFmClient(api_key=LASTFM_API_KEY, username=LASTFM_USERNAME)
@@ -5046,6 +5048,7 @@ def monitor_add_artist():
                 for album_name, tracks in zip(
                     album_names, ex.map(_fetch_album_tracks, album_names)
                 ):
+                    album_new_tracks: list[tuple[str, str]] = []
                     for t_a, t_t in tracks:
                         k = _track_key(t_a, t_t)
                         if k in seen_keys:
@@ -5056,9 +5059,12 @@ def monitor_add_artist():
                                 "artist": t_a,
                                 "title": t_t,
                                 "retry_count": 0,
-                                "last_queued_at": None,
+                                "last_queued_at": now,
                                 "cooldown_until": None,
                             })
+                            album_new_tracks.append((t_a, t_t))
+                    if album_new_tracks:
+                        albums_to_queue.append((album_name, album_new_tracks))
     except Exception as e:
         logger.error(f"Monitor: error fetching discography for '{artist_name}': {e}")
 
@@ -5074,7 +5080,35 @@ def monitor_add_artist():
     data[artist_name] = entry
     _save_monitor_data(data)
 
-    # Kick the monitor worker so it queues pending tracks immediately.
+    # Immediately queue one batch download job per album so downloads start
+    # right away, grouped as albums rather than one flat batch.
+    if albums_to_queue:
+        with _download_lock:
+            for album_name, album_tracks in albums_to_queue:
+                job_id = f"monitor_{int(now)}_{secrets.token_hex(4)}"
+                job: dict = {
+                    "id": job_id,
+                    "type": "album",
+                    "artist": artist_name,
+                    "title": album_name,
+                    "status": "queued",
+                    "created_at": now,
+                    "started_at": None,
+                    "finished_at": None,
+                    "message": "Queued (monitor)",
+                    "tracks": [{"artist": t_a, "title": t_t} for t_a, t_t in album_tracks],
+                    "total_tracks": len(album_tracks),
+                    "completed_tracks": 0,
+                    "failed_tracks": 0,
+                    "failed_tracks_list": [],
+                    "submitted_by": "monitor",
+                    "last_error": "",
+                    "last_output": "",
+                }
+                download_status[job_id] = job
+                _download_queue.append(job_id)
+        _ensure_download_worker()
+
     _ensure_monitor_worker()
 
     logger.info(
