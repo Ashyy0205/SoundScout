@@ -142,6 +142,10 @@ _HISTORY_MAX_ENTRIES = 500
 # Artist monitoring
 _MONITOR_PATH = _webui_data_dir() / "monitored_artists.json"
 _monitor_file_lock = threading.Lock()
+
+# Persistent download queue (survives container/server restarts)
+_QUEUE_PATH = _webui_data_dir() / "download_queue.json"
+_queue_persist_lock = threading.Lock()
 _MONITOR_CHECK_INTERVAL_SECONDS = 2 * 60 * 60  # re-check for new releases every 2 h
 _MONITOR_MAX_RETRIES = 3                         # fail 3× → 7-day cooldown
 _MONITOR_COOLDOWN_DAYS = 7
@@ -320,6 +324,49 @@ def _save_monitor_data(data: dict) -> None:
             tmp.replace(_MONITOR_PATH)
         except Exception as e:
             logger.error(f"Failed to save monitor data: {e}")
+
+
+def _persist_queue() -> None:
+    """Snapshot queued (not yet started) jobs to disk for restart recovery."""
+    try:
+        with _download_lock:
+            snapshot = [dict(j) for j in download_status.values() if j.get("status") == "queued"]
+            order = list(_download_queue)
+        with _queue_persist_lock:
+            _QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _QUEUE_PATH.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps({"jobs": snapshot, "order": order}, indent=2), encoding="utf-8")
+            tmp.replace(_QUEUE_PATH)
+    except Exception as e:
+        logger.warning(f"Failed to persist download queue: {e}")
+
+
+def _restore_queue() -> None:
+    """Reload queued jobs persisted by _persist_queue after a restart."""
+    try:
+        if not _QUEUE_PATH.exists():
+            return
+        payload = json.loads(_QUEUE_PATH.read_text(encoding="utf-8"))
+        jobs_list = payload.get("jobs") or []
+        order = payload.get("order") or []
+        jobs_by_id = {j["id"]: j for j in jobs_list if isinstance(j, dict) and j.get("id")}
+        count = 0
+        with _download_lock:
+            for job_id in order:
+                job = jobs_by_id.get(job_id)
+                if not job:
+                    continue
+                job["status"] = "queued"
+                job["started_at"] = None
+                job["message"] = "Queued (restored)"
+                download_status[job_id] = job
+                if job_id not in _download_queue:
+                    _download_queue.append(job_id)
+                count += 1
+        if count:
+            logger.info(f"Restored {count} queued download job(s) from previous session")
+    except Exception as e:
+        logger.warning(f"Failed to restore download queue: {e}")
 
 
 def _spotify_token_from_sp_dc(sp_dc: str) -> dict:
@@ -3224,6 +3271,7 @@ def _monitor_trigger_track(artist: str, title: str) -> None:
             download_status[job_id] = job
             _download_queue.append(job_id)
         _ensure_download_worker()
+        _persist_queue()
     except Exception as e:
         logger.error(f"Monitor: failed to queue {artist} - {title}: {e}")
 
@@ -3732,6 +3780,8 @@ def _download_worker_loop() -> None:
                     download_status.clear()
             except Exception:
                 pass
+
+        _persist_queue()
 
         plex_pl_name = (job.get("plex_playlist_name") or "").strip()
         plex_pl_tracks = job.get("plex_playlist_all_tracks") or []
@@ -4837,6 +4887,7 @@ def import_download():
         download_status[job_id] = job
         _download_queue.append(job_id)
     _ensure_download_worker()
+    _persist_queue()
 
     return jsonify({
         "success": True,
@@ -4969,6 +5020,7 @@ def download():
             _download_queue.append(job_id)
 
         _ensure_download_worker()
+        _persist_queue()
 
         logger.info(f"Queued download job {job_id}: {artist} - {title} ({dl_type})")
         return jsonify(
@@ -5168,6 +5220,7 @@ def monitor_add_artist():
                     download_status[job_id] = job
                     _download_queue.append(job_id)
             _ensure_download_worker()
+        _persist_queue()
 
         logger.info(
             f"Monitor: added '{artist_name}' mode={mode}, "
@@ -5400,6 +5453,9 @@ def run_webui(host="0.0.0.0", port=5000):
     except Exception:
         pass
 
+    _restore_queue()
+    if _download_queue:
+        _ensure_download_worker()
     _ensure_monitor_worker()
     logger.info(f"Starting Web UI on {host}:{port}")
     app.run(host=host, port=port, debug=False)

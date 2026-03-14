@@ -1526,6 +1526,30 @@ body.is-desktop-webui .home-shelf.at-scroll-end:hover   .shelf-arrow-right {
   margin-bottom: 4px;
 }
 .failed-tracks-job-header em { font-style: normal; color: var(--text-primary); }
+
+/* Collapsible per-job group */
+.failed-tracks-details {
+  margin-bottom: 8px;
+}
+.failed-tracks-details > summary {
+  cursor: pointer;
+  list-style: none;
+  margin-bottom: 4px;
+  user-select: none;
+}
+.failed-tracks-details > summary::-webkit-details-marker { display: none; }
+.failed-tracks-details > summary::before {
+  content: '▶';
+  display: inline-block;
+  font-size: 0.65rem;
+  margin-right: 6px;
+  transition: transform 0.15s;
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+.failed-tracks-details[open] > summary::before {
+  transform: rotate(90deg);
+}
 .failed-tracks-list {
   margin-bottom: 14px;
   display: flex;

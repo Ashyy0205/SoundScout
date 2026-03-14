@@ -1020,16 +1020,15 @@ function renderDownloadsView(state) {
 
     resultsContainer.appendChild(list);
 
-    // ── Failed tracks section (from recently-finished in-memory jobs) ────
-    // Includes jobs with per-track failures AND jobs that failed at the scraper level (no track list).
-    const failedJobs = jobs.filter(j => {
+    // ── Failed tracks section (desktop only — can be very long after large batches) ─
+    const failedJobs = !isMobileWebUi() && jobs.filter(j => {
         const s = normStatus(j && j.status);
         if (s !== 'partial' && s !== 'failed') return false;
         return (Array.isArray(j.failed_tracks_list) && j.failed_tracks_list.length > 0) ||
                (s === 'failed' && j.last_error);
     });
 
-    if (failedJobs.length > 0) {
+    if (failedJobs && failedJobs.length > 0) {
         const failSection = document.createElement('div');
         failSection.className = 'failed-tracks-section';
 
@@ -1042,7 +1041,7 @@ function renderDownloadsView(state) {
             const ftl = job.failed_tracks_list || [];
             const jobLabel = [job.artist, job.title].filter(Boolean).join(' — ') || 'Unknown job';
 
-            // Scraper-level failure (no per-track list) — show the error message directly.
+            // Scraper-level failure (no per-track list) — show inline, no dropdown needed.
             if (ftl.length === 0 && job.last_error) {
                 const crashBlock = document.createElement('div');
                 crashBlock.className = 'failed-tracks-job-header';
@@ -1052,26 +1051,29 @@ function renderDownloadsView(state) {
                 return;
             }
 
-            // Copy button — builds a plain-text list for the user.
+            // Collapsible <details> per job.
+            const details = document.createElement('details');
+            details.className = 'failed-tracks-details';
+
+            const summary = document.createElement('summary');
+            summary.className = 'failed-tracks-job-header';
+
             const copyBtn = document.createElement('button');
             copyBtn.className = 'nav-btn';
-            copyBtn.style.cssText = 'font-size:0.72rem;padding:2px 8px;margin-bottom:6px;';
+            copyBtn.style.cssText = 'font-size:0.72rem;padding:2px 8px;margin-left:10px;vertical-align:middle;';
             copyBtn.textContent = 'Copy list';
-            copyBtn.onclick = () => {
+            copyBtn.onclick = (e) => {
+                e.stopPropagation(); // don't toggle the <details>
                 const lines = ftl.map(f => `${f.artist} — ${f.title}`).join('\n');
                 navigator.clipboard.writeText(lines).then(() => {
                     copyBtn.textContent = '✓ Copied';
                     setTimeout(() => { copyBtn.textContent = 'Copy list'; }, 1800);
-                }).catch(() => {
-                    copyBtn.textContent = 'Copy failed';
-                });
+                }).catch(() => { copyBtn.textContent = 'Copy failed'; });
             };
 
-            const jobHeader = document.createElement('div');
-            jobHeader.className = 'failed-tracks-job-header';
-            jobHeader.innerHTML = `<span>${escapeHtml(ftl.length)} track${ftl.length === 1 ? '' : 's'} from <em>${escapeHtml(jobLabel)}</em></span>`;
-            jobHeader.appendChild(copyBtn);
-            failSection.appendChild(jobHeader);
+            summary.innerHTML = `<span>${escapeHtml(ftl.length)} track${ftl.length === 1 ? '' : 's'} from <em>${escapeHtml(jobLabel)}</em></span>`;
+            summary.appendChild(copyBtn);
+            details.appendChild(summary);
 
             const trackList = document.createElement('div');
             trackList.className = 'failed-tracks-list';
@@ -1085,7 +1087,8 @@ function renderDownloadsView(state) {
                 `;
                 trackList.appendChild(row);
             });
-            failSection.appendChild(trackList);
+            details.appendChild(trackList);
+            failSection.appendChild(details);
         });
 
         resultsContainer.appendChild(failSection);
