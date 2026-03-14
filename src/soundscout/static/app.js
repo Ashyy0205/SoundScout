@@ -2213,14 +2213,14 @@ async function openArtist(artistName) {
 
     const resultsContainer = document.getElementById('resultsContainer');
     resultsContainer.innerHTML = '';
-    const downloadLabel = isMobileWebUi() ? 'Download' : 'Download Top Tracks';
     const isMonArtist = monitoredArtists.has((artistName || '').toLowerCase());
+    const downloadBtn = isMobileWebUi() ? '' : `<button class="nav-btn" onclick="downloadItem('${escapeJsString(artistName)}', '${escapeJsString(artistName)}', 'artist', this)">Download Top Tracks</button>`;
     setViewHeader(`
         <button class="nav-btn" onclick="goBack()">← Back</button>
         <div class="view-title">${escapeHtml(artistName)}</div>
         <div class="view-actions">
             <button class="nav-btn monitor-header-btn${isMonArtist ? ' is-monitored' : ''}" onclick="openMonitorModal('${escapeJsString(artistName)}')"><i data-lucide="bookmark"></i> ${isMonArtist ? 'Monitored' : 'Monitor'}</button>
-            <button class="nav-btn" onclick="downloadItem('${escapeJsString(artistName)}', '${escapeJsString(artistName)}', 'artist', this)">${downloadLabel}</button>
+            ${downloadBtn}
         </div>
     `);
     setLoading(true, 'Loading artist…');
@@ -2255,14 +2255,14 @@ async function openArtist(artistName) {
 function renderArtistView(state) {
     currentView = { kind: 'artist', state };
     setResultsMode('list');
-    const downloadLabel = isMobileWebUi() ? 'Download' : 'Download Top Tracks';
     const isMonArtist = monitoredArtists.has((state.artist || '').toLowerCase());
+    const downloadBtn = isMobileWebUi() ? '' : `<button class="nav-btn" onclick="downloadItem('${escapeJsString(state.artist)}', '${escapeJsString(state.artist)}', 'artist', this)">Download Top Tracks</button>`;
     setViewHeader(`
         <button class="nav-btn" onclick="goBack()">← Back</button>
         <div class="view-title">${escapeHtml(state.artist)}</div>
         <div class="view-actions">
             <button class="nav-btn monitor-header-btn${isMonArtist ? ' is-monitored' : ''}" onclick="openMonitorModal('${escapeJsString(state.artist)}')"><i data-lucide="bookmark"></i> ${isMonArtist ? 'Monitored' : 'Monitor'}</button>
-            <button class="nav-btn" onclick="downloadItem('${escapeJsString(state.artist)}', '${escapeJsString(state.artist)}', 'artist', this)">${downloadLabel}</button>
+            ${downloadBtn}
         </div>
     `);
 
