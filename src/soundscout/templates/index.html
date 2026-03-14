@@ -328,6 +328,71 @@
   </nav>
 
   <!-- =========================
+       MONITOR MODAL
+       ========================= -->
+  <div id="monitorModal"
+       class="monitor-modal-overlay"
+       style="display: none;"
+       role="dialog"
+       aria-modal="true"
+       aria-labelledby="monitorModalTitle">
+    <div class="monitor-modal">
+      <button class="monitor-modal-close"
+              type="button"
+              onclick="closeMonitorModal()"
+              aria-label="Close">×</button>
+
+      <div class="monitor-modal-header">
+        <div class="monitor-modal-icon">🔖</div>
+        <div>
+          <div id="monitorModalTitle" class="monitor-modal-title">Monitor Artist</div>
+          <div id="monitorModalArtist" class="monitor-modal-artist"></div>
+        </div>
+      </div>
+
+      <!-- Shown when the artist is NOT yet monitored -->
+      <div id="monitorOptionsArea">
+        <p class="monitor-modal-desc">Choose what to download:</p>
+        <div class="monitor-modal-options">
+          <button class="monitor-option" type="button" onclick="confirmMonitor('all')">
+            <div class="monitor-option-icon">⬇</div>
+            <div class="monitor-option-body">
+              <div class="monitor-option-label">All releases</div>
+              <div class="monitor-option-desc">Download full discography + every future release</div>
+            </div>
+          </button>
+          <button class="monitor-option" type="button" onclick="confirmMonitor('future')">
+            <div class="monitor-option-icon">🔔</div>
+            <div class="monitor-option-body">
+              <div class="monitor-option-label">Future only</div>
+              <div class="monitor-option-desc">Skip existing, auto-download new releases as they drop</div>
+            </div>
+          </button>
+          <button class="monitor-option" type="button" onclick="confirmMonitor('existing')">
+            <div class="monitor-option-icon">📚</div>
+            <div class="monitor-option-body">
+              <div class="monitor-option-label">Existing only</div>
+              <div class="monitor-option-desc">Download current discography once, no future tracking</div>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Shown when the artist IS already monitored -->
+      <div id="monitorStopArea" style="display: none;">
+        <p class="monitor-modal-desc">This artist is currently being monitored.</p>
+        <button class="monitor-stop-btn" type="button" onclick="unmonitorArtist()">
+          Stop Monitoring
+        </button>
+      </div>
+
+      <button class="monitor-cancel-btn" type="button" onclick="closeMonitorModal()">
+        Cancel
+      </button>
+    </div>
+  </div>
+
+  <!-- =========================
        SCRIPTS
        ========================= -->
   <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>

@@ -4932,3 +4932,211 @@ body.view-scout .results-container {
     font-size: 1.25rem;
   }
 }
+
+/* =============================================================================
+   Artist Monitoring — bookmark button + modal
+   ============================================================================= */
+
+/* --- Bookmark pill on artist cards (top-right of image) --- */
+.monitor-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: rgba(7, 11, 18, 0.82)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23EAF2FF' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z'/%3E%3C/svg%3E")
+    center / 15px 15px no-repeat;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease, background-color 0.15s ease;
+  z-index: 4;
+}
+
+.result-card:hover .monitor-btn,
+.result-card:focus-within .monitor-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.monitor-btn.is-monitored {
+  opacity: 1;
+  pointer-events: auto;
+  background-color: rgba(7, 11, 18, 0.88);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23FFD300' stroke='%23FFD300' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z'/%3E%3C/svg%3E");
+}
+
+.monitor-btn:hover {
+  transform: scale(1.15);
+}
+
+/* Header button state */
+.monitor-header-btn.is-monitored {
+  background: rgba(255, 211, 0, 0.15);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+/* --- Modal overlay --- */
+.monitor-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 6, 14, 0.75);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.monitor-modal {
+  background: var(--bg-1, #070B12);
+  border: 1px solid rgba(2, 215, 242, 0.2);
+  border-radius: 16px;
+  padding: 28px 24px 20px;
+  width: 100%;
+  max-width: 420px;
+  position: relative;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+}
+
+.monitor-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: none;
+  border: none;
+  color: var(--text-secondary, rgba(234, 242, 255, 0.5));
+  font-size: 22px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+  transition: color 0.15s;
+}
+.monitor-modal-close:hover { color: var(--text-primary, #EAF2FF); }
+
+.monitor-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.monitor-modal-icon {
+  font-size: 28px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.monitor-modal-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary, #EAF2FF);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.monitor-modal-artist {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--accent-scan, #02D7F2);
+  margin-top: 2px;
+}
+
+.monitor-modal-desc {
+  font-size: 0.82rem;
+  color: var(--text-secondary, rgba(234, 242, 255, 0.55));
+  margin: 0 0 14px;
+  letter-spacing: 0.02em;
+}
+
+/* --- Option buttons --- */
+.monitor-modal-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.monitor-option {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(2, 215, 242, 0.12);
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  color: var(--text-primary, #EAF2FF);
+  width: 100%;
+}
+.monitor-option:hover {
+  background: rgba(2, 215, 242, 0.07);
+  border-color: rgba(2, 215, 242, 0.35);
+  transform: translateY(-1px);
+}
+
+.monitor-option-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  width: 24px;
+  text-align: center;
+}
+
+.monitor-option-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary, #EAF2FF);
+}
+
+.monitor-option-desc {
+  font-size: 0.75rem;
+  color: var(--text-secondary, rgba(234, 242, 255, 0.5));
+  margin-top: 2px;
+}
+
+/* --- Modal footer buttons --- */
+.monitor-stop-btn {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  background: rgba(255, 62, 62, 0.1);
+  border: 1px solid rgba(255, 62, 62, 0.3);
+  border-radius: 8px;
+  color: #ff3e3e;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 10px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.monitor-stop-btn:hover {
+  background: rgba(255, 62, 62, 0.2);
+  border-color: rgba(255, 62, 62, 0.55);
+}
+
+.monitor-cancel-btn {
+  display: block;
+  width: 100%;
+  padding: 9px;
+  background: transparent;
+  border: 1px solid rgba(234, 242, 255, 0.12);
+  border-radius: 8px;
+  color: var(--text-secondary, rgba(234, 242, 255, 0.5));
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.monitor-cancel-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary, #EAF2FF);
+}
+

@@ -139,6 +139,15 @@ _HISTORY_PATH = _webui_data_dir() / "download_history.json"
 _history_lock = threading.Lock()
 _HISTORY_MAX_ENTRIES = 500
 
+# Artist monitoring
+_MONITOR_PATH = _webui_data_dir() / "monitored_artists.json"
+_monitor_file_lock = threading.Lock()
+_MONITOR_CHECK_INTERVAL_SECONDS = 2 * 60 * 60  # re-check for new releases every 2 h
+_MONITOR_MAX_RETRIES = 3                         # fail 3× → 7-day cooldown
+_MONITOR_COOLDOWN_DAYS = 7
+_monitor_worker: threading.Thread | None = None
+_monitor_worker_lock = threading.Lock()
+
 
 def _parse_default_autodiscovery_from_cron() -> tuple[int, str]:
     """Return (weekday, time_str) default for the UI.
@@ -289,6 +298,28 @@ def _save_user_store(data: dict) -> None:
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     tmp.replace(_USER_STORE_PATH)
 
+
+def _load_monitor_data() -> dict:
+    with _monitor_file_lock:
+        try:
+            if not _MONITOR_PATH.exists():
+                return {}
+            raw = _MONITOR_PATH.read_text(encoding="utf-8")
+            d = json.loads(raw)
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}
+
+
+def _save_monitor_data(data: dict) -> None:
+    with _monitor_file_lock:
+        try:
+            _MONITOR_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _MONITOR_PATH.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+            tmp.replace(_MONITOR_PATH)
+        except Exception as e:
+            logger.error(f"Failed to save monitor data: {e}")
 
 
 def _spotify_token_from_sp_dc(sp_dc: str) -> dict:
@@ -3142,6 +3173,191 @@ def _ensure_download_worker() -> None:
         _download_worker.start()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Artist Monitoring — background loop
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _monitor_trigger_track(artist: str, title: str) -> None:
+    """Queue a single track download from the monitoring system."""
+    try:
+        if _track_in_library(artist, title):
+            return
+        job_id = f"monitor_{int(time.time())}_{secrets.token_hex(4)}"
+        job = {
+            "id": job_id,
+            "type": "track",
+            "artist": artist,
+            "title": title,
+            "status": "queued",
+            "created_at": time.time(),
+            "started_at": None,
+            "finished_at": None,
+            "message": "Queued (monitor)",
+            "tracks": [{"artist": artist, "title": title}],
+            "total_tracks": 1,
+            "completed_tracks": 0,
+            "failed_tracks": 0,
+            "failed_tracks_list": [],
+            "submitted_by": "monitor",
+            "last_error": "",
+            "last_output": "",
+        }
+        with _download_lock:
+            download_status[job_id] = job
+            _download_queue.append(job_id)
+        _ensure_download_worker()
+    except Exception as e:
+        logger.error(f"Monitor: failed to queue {artist} - {title}: {e}")
+
+
+def _monitor_process_artist(artist_name: str) -> None:
+    """Process one monitored artist: queue pending downloads and check for new releases."""
+    now = time.time()
+
+    data = _load_monitor_data()
+    if artist_name not in data:
+        return
+    entry = dict(data[artist_name])
+
+    mode = str(entry.get("mode") or "all").lower()
+    last_checked = float(entry.get("last_checked") or 0)
+    pending = list(entry.get("pending") or [])
+
+    # Phase 1 (every tick): queue any pending items that haven't been queued yet.
+    new_pending: list[dict] = []
+    for item in pending:
+        if not isinstance(item, dict):
+            continue
+        t_artist = str(item.get("artist") or artist_name).strip()
+        t_title = str(item.get("title") or "").strip()
+        if not t_title:
+            continue
+
+        cooldown_until = item.get("cooldown_until")
+        if cooldown_until and now < float(cooldown_until):
+            new_pending.append(item)
+            continue
+
+        if _track_in_library(t_artist, t_title):
+            continue  # already downloaded
+
+        if item.get("last_queued_at") is None:
+            _monitor_trigger_track(t_artist, t_title)
+            item = dict(item)
+            item["last_queued_at"] = now
+
+        new_pending.append(item)
+
+    # Phase 2 (every 2 h): retry failed downloads + check for new releases.
+    do_full_check = (now - last_checked) >= _MONITOR_CHECK_INTERVAL_SECONDS
+    if do_full_check:
+        # Retry analysis: items queued > 30 min ago and still not in library = failed.
+        retry_pending: list[dict] = []
+        for item in new_pending:
+            if not isinstance(item, dict):
+                continue
+            t_artist = str(item.get("artist") or artist_name).strip()
+            t_title = str(item.get("title") or "").strip()
+            if not t_title or _track_in_library(t_artist, t_title):
+                continue
+
+            cooldown_until = item.get("cooldown_until")
+            if cooldown_until and now < float(cooldown_until):
+                retry_pending.append(item)
+                continue
+
+            last_queued_at = item.get("last_queued_at")
+            if last_queued_at and (now - float(last_queued_at)) > 30 * 60:
+                item = dict(item)
+                retry_count = int(item.get("retry_count") or 0) + 1
+                item["retry_count"] = retry_count
+                if retry_count >= _MONITOR_MAX_RETRIES:
+                    item["cooldown_until"] = now + (_MONITOR_COOLDOWN_DAYS * 86400)
+                    item.pop("last_queued_at", None)
+                    logger.info(
+                        f"Monitor: {t_artist} - {t_title} on "
+                        f"{_MONITOR_COOLDOWN_DAYS}-day cooldown after {retry_count} retries"
+                    )
+                    retry_pending.append(item)
+                    continue
+                logger.info(f"Monitor: retrying download for {t_artist} - {t_title} (attempt {retry_count})")
+                _monitor_trigger_track(t_artist, t_title)
+                item["last_queued_at"] = now
+
+            retry_pending.append(item)
+
+        new_pending = retry_pending
+
+        # Check for new album releases (only for modes that track future content).
+        if mode in ("all", "future") and LASTFM_API_KEY:
+            known_albums = set(entry.get("known_albums") or [])
+            known_lower = {a.lower().strip() for a in known_albums}
+            try:
+                lfm = LastFmClient(api_key=LASTFM_API_KEY, username=LASTFM_USERNAME)
+                albums = lfm.get_artist_albums(artist_name, limit=50) or []
+                for album in albums:
+                    album_name_raw = (album.get("name") or "").strip()
+                    if not album_name_raw or album_name_raw.lower().strip() in known_lower:
+                        continue
+                    logger.info(f"Monitor: new release detected for {artist_name}: {album_name_raw}")
+                    try:
+                        tracks = lfm.get_album_tracks(artist_name, album_name_raw) or []
+                    except Exception:
+                        tracks = []
+                    for t_a, t_t in tracks:
+                        if not _track_in_library(t_a, t_t):
+                            new_pending.append({
+                                "artist": t_a,
+                                "title": t_t,
+                                "retry_count": 0,
+                                "last_queued_at": None,
+                                "cooldown_until": None,
+                            })
+                    known_albums.add(album_name_raw)
+                    known_lower.add(album_name_raw.lower().strip())
+            except Exception as e:
+                logger.error(f"Monitor: error checking new releases for {artist_name}: {e}")
+            entry["known_albums"] = list(known_albums)
+
+        entry["last_checked"] = now
+
+    entry["pending"] = new_pending
+
+    # Atomically save only this entry.
+    data2 = _load_monitor_data()
+    if artist_name in data2:
+        data2[artist_name] = entry
+        _save_monitor_data(data2)
+
+
+def _monitor_loop() -> None:
+    """Background daemon: check monitored artists every minute (2 h action gate)."""
+    while True:
+        try:
+            data = _load_monitor_data()
+            for artist_name in list(data.keys()):
+                try:
+                    _monitor_process_artist(artist_name)
+                except Exception as e:
+                    logger.error(f"Monitor: error processing '{artist_name}': {e}")
+        except Exception as e:
+            logger.error(f"Monitor loop error: {e}")
+        time.sleep(60)
+
+
+def _ensure_monitor_worker() -> None:
+    global _monitor_worker
+    with _monitor_worker_lock:
+        if _monitor_worker and _monitor_worker.is_alive():
+            return
+        _monitor_worker = threading.Thread(target=_monitor_loop, daemon=True, name="monitor-worker")
+        _monitor_worker.start()
+        logger.info("Monitor worker started")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def _execute_track_download(job: dict, t_artist: str, t_title: str) -> bool:
     """Download one track via scraper subprocess and update job counters.
 
@@ -4756,6 +4972,154 @@ def downloads_state():
     return jsonify(_downloads_snapshot())
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Artist Monitoring API
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/monitor/artists", methods=["GET"])
+def monitor_list_artists():
+    """Return all monitored artists and their current state."""
+    data = _load_monitor_data()
+    result = []
+    now = time.time()
+    for artist_name, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        pending = entry.get("pending") or []
+        cooldown_count = sum(
+            1 for p in pending
+            if isinstance(p, dict) and p.get("cooldown_until") and now < float(p.get("cooldown_until") or 0)
+        )
+        pending_active = len(pending) - cooldown_count
+        result.append({
+            "artist": artist_name,
+            "mode": entry.get("mode", "all"),
+            "added_at": entry.get("added_at"),
+            "last_checked": entry.get("last_checked"),
+            "pending_count": pending_active,
+            "cooldown_count": cooldown_count,
+            "known_albums_count": len(entry.get("known_albums") or []),
+        })
+    result.sort(key=lambda x: (x.get("artist") or "").lower())
+    return jsonify({"artists": result})
+
+
+@app.route("/api/monitor/artists", methods=["POST"])
+def monitor_add_artist():
+    """Add or update monitoring for an artist.
+
+    JSON body:
+        artist: artist name (required)
+        mode:   "all" | "future" | "existing"  (default: "all")
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    artist_name = (body.get("artist") or "").strip()
+    mode = (body.get("mode") or "all").strip().lower()
+
+    if not artist_name:
+        return jsonify({"error": "Missing artist field"}), 400
+    if mode not in ("all", "future", "existing"):
+        return jsonify({"error": "mode must be 'all', 'future', or 'existing'"}), 400
+    if not LASTFM_API_KEY:
+        return jsonify({"error": "LASTFM_API_KEY is required for artist monitoring"}), 500
+
+    now = time.time()
+    known_albums: list[str] = []
+    pending_tracks: list[dict] = []
+    seen_keys: set[str] = set()
+
+    try:
+        lfm = LastFmClient(api_key=LASTFM_API_KEY, username=LASTFM_USERNAME)
+        albums = lfm.get_artist_albums(artist_name, limit=50) or []
+
+        def _fetch_album_tracks(album_name: str) -> list[tuple[str, str]]:
+            try:
+                return lfm.get_album_tracks(artist_name, album_name) or []
+            except Exception:
+                return []
+
+        album_names = [(a.get("name") or "").strip() for a in albums if (a.get("name") or "").strip()]
+        known_albums = list(album_names)
+
+        if mode in ("all", "existing") and album_names:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+                for album_name, tracks in zip(
+                    album_names, ex.map(_fetch_album_tracks, album_names)
+                ):
+                    for t_a, t_t in tracks:
+                        k = _track_key(t_a, t_t)
+                        if k in seen_keys:
+                            continue
+                        seen_keys.add(k)
+                        if not _track_in_library(t_a, t_t):
+                            pending_tracks.append({
+                                "artist": t_a,
+                                "title": t_t,
+                                "retry_count": 0,
+                                "last_queued_at": None,
+                                "cooldown_until": None,
+                            })
+    except Exception as e:
+        logger.error(f"Monitor: error fetching discography for '{artist_name}': {e}")
+
+    entry = {
+        "mode": mode,
+        "added_at": now,
+        "last_checked": now,
+        "known_albums": known_albums,
+        "pending": pending_tracks,
+    }
+
+    data = _load_monitor_data()
+    data[artist_name] = entry
+    _save_monitor_data(data)
+
+    # Kick the monitor worker so it queues pending tracks immediately.
+    _ensure_monitor_worker()
+
+    logger.info(
+        f"Monitor: added '{artist_name}' mode={mode}, "
+        f"{len(known_albums)} albums, {len(pending_tracks)} tracks pending"
+    )
+    return jsonify({
+        "success": True,
+        "artist": artist_name,
+        "mode": mode,
+        "known_albums": len(known_albums),
+        "pending_tracks": len(pending_tracks),
+    })
+
+
+@app.route("/api/monitor/artists/<path:artist>", methods=["DELETE"])
+def monitor_remove_artist(artist: str):
+    """Remove monitoring for an artist."""
+    artist = (artist or "").strip()
+    if not artist:
+        return jsonify({"error": "Missing artist"}), 400
+    data = _load_monitor_data()
+    removed = artist in data
+    data.pop(artist, None)
+    _save_monitor_data(data)
+    return jsonify({"success": True, "removed": removed, "artist": artist})
+
+
+@app.route("/api/monitor/status", methods=["GET"])
+def monitor_status():
+    """Return a summary of monitoring state (artist names + counts)."""
+    data = _load_monitor_data()
+    total_pending = sum(
+        len(v.get("pending") or []) for v in data.values() if isinstance(v, dict)
+    )
+    return jsonify({
+        "monitored_count": len(data),
+        "total_pending": total_pending,
+        "artists": list(data.keys()),
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 @app.route("/api/status/<download_id>", methods=["GET"])
 def get_status(download_id):
     """Get download status by ID (only accessible to the job owner)."""
@@ -4920,6 +5284,7 @@ def run_webui(host="0.0.0.0", port=5000):
     except Exception:
         pass
 
+    _ensure_monitor_worker()
     logger.info(f"Starting Web UI on {host}:{port}")
     app.run(host=host, port=port, debug=False)
 

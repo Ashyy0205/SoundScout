@@ -132,6 +132,10 @@ let authFailClosed = true;
 
 let homeLoadedOnce = false;
 
+// Artist monitoring state
+let monitoredArtists = new Set(); // lowercase artist names currently being monitored
+let _monitorModalArtist = null;    // artist name the open modal refers to
+
 // ── In-memory view-data cache ────────────────────────────────────────────────
 // Stores the last successful API response for heavy views so navigating away
 // and back is instant.  The server also caches these but the JS cache avoids
@@ -1572,6 +1576,7 @@ async function initAuth() {
             // Load home feed after auth becomes available.
             setActiveNav('search');
             openHomeRecommendations(false);
+            loadMonitoredArtists();
         }
 
     } catch (e) {
@@ -1590,6 +1595,7 @@ async function initAuth() {
             setAuthOverlayVisible(false);
             setActiveNav('search');
             openHomeRecommendations(false);
+            loadMonitoredArtists();
         }
     }
 }
@@ -1754,6 +1760,100 @@ async function pollPlexLogin(pinId) {
         } catch (e2) {}
     }
 }
+
+// ── Artist Monitoring ────────────────────────────────────────────────────────
+
+async function loadMonitoredArtists() {
+    try {
+        const data = await apiFetchJson('/api/monitor/status');
+        monitoredArtists = new Set((data.artists || []).map(a => a.toLowerCase()));
+    } catch (e) {
+        // fail silently — not critical
+    }
+}
+
+function openMonitorModal(artistName) {
+    if (!artistName) return;
+    _monitorModalArtist = artistName;
+
+    const modal = document.getElementById('monitorModal');
+    const artistEl = document.getElementById('monitorModalArtist');
+    const optionsArea = document.getElementById('monitorOptionsArea');
+    const stopArea = document.getElementById('monitorStopArea');
+
+    if (artistEl) artistEl.textContent = artistName;
+
+    const isMonitored = monitoredArtists.has(artistName.toLowerCase());
+    if (optionsArea) optionsArea.style.display = isMonitored ? 'none' : '';
+    if (stopArea) stopArea.style.display = isMonitored ? '' : 'none';
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeMonitorModal() {
+    const modal = document.getElementById('monitorModal');
+    if (modal) modal.style.display = 'none';
+    _monitorModalArtist = null;
+}
+
+async function confirmMonitor(mode) {
+    const artistName = _monitorModalArtist;
+    if (!artistName) return;
+    closeMonitorModal();
+    try {
+        await apiFetchJson('/api/monitor/artists', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ artist: artistName, mode }),
+        });
+        monitoredArtists.add(artistName.toLowerCase());
+        _refreshMonitorButtons(artistName, true);
+    } catch (e) {
+        console.error('Monitor add error:', e);
+    }
+}
+
+async function unmonitorArtist() {
+    const artistName = _monitorModalArtist;
+    if (!artistName) return;
+    closeMonitorModal();
+    try {
+        await apiFetchJson(`/api/monitor/artists/${encodeURIComponent(artistName)}`, {
+            method: 'DELETE',
+        });
+        monitoredArtists.delete(artistName.toLowerCase());
+        _refreshMonitorButtons(artistName, false);
+    } catch (e) {
+        console.error('Monitor remove error:', e);
+    }
+}
+
+function _refreshMonitorButtons(artistName, isMonitored) {
+    const lc = (artistName || '').toLowerCase();
+    // Update bookmark buttons on visible artist cards.
+    document.querySelectorAll('.monitor-btn[data-artist]').forEach(btn => {
+        if ((btn.dataset.artist || '').toLowerCase() === lc) {
+            btn.classList.toggle('is-monitored', isMonitored);
+            btn.title = isMonitored ? 'Stop Monitoring' : 'Monitor Artist';
+        }
+    });
+    // Update the header button if the artist view is open for this artist.
+    if (currentView && currentView.kind === 'artist' &&
+            (currentView.state && currentView.state.artist || '').toLowerCase() === lc) {
+        const hBtn = document.querySelector('.monitor-header-btn');
+        if (hBtn) {
+            hBtn.classList.toggle('is-monitored', isMonitored);
+            hBtn.textContent = isMonitored ? '\uD83D\uDD16 Monitored' : '\uD83D\uDD16 Monitor';
+        }
+    }
+}
+
+// Close the monitor modal when clicking the backdrop.
+document.addEventListener('click', (e) => {
+    const modal = document.getElementById('monitorModal');
+    if (modal && e.target === modal) closeMonitorModal();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function apiFetchJson(url, options) {
     const resp = await fetch(url, options);
@@ -2109,10 +2209,12 @@ async function openArtist(artistName) {
     const resultsContainer = document.getElementById('resultsContainer');
     resultsContainer.innerHTML = '';
     const downloadLabel = isMobileWebUi() ? 'Download' : 'Download Top Tracks';
+    const isMonArtist = monitoredArtists.has((artistName || '').toLowerCase());
     setViewHeader(`
         <button class="nav-btn" onclick="goBack()">← Back</button>
         <div class="view-title">${escapeHtml(artistName)}</div>
         <div class="view-actions">
+            <button class="nav-btn monitor-header-btn${isMonArtist ? ' is-monitored' : ''}" onclick="openMonitorModal('${escapeJsString(artistName)}')">🔖 ${isMonArtist ? 'Monitored' : 'Monitor'}</button>
             <button class="nav-btn" onclick="downloadItem('${escapeJsString(artistName)}', '${escapeJsString(artistName)}', 'artist', this)">${downloadLabel}</button>
         </div>
     `);
@@ -2149,10 +2251,12 @@ function renderArtistView(state) {
     currentView = { kind: 'artist', state };
     setResultsMode('list');
     const downloadLabel = isMobileWebUi() ? 'Download' : 'Download Top Tracks';
+    const isMonArtist = monitoredArtists.has((state.artist || '').toLowerCase());
     setViewHeader(`
         <button class="nav-btn" onclick="goBack()">← Back</button>
         <div class="view-title">${escapeHtml(state.artist)}</div>
         <div class="view-actions">
+            <button class="nav-btn monitor-header-btn${isMonArtist ? ' is-monitored' : ''}" onclick="openMonitorModal('${escapeJsString(state.artist)}')">🔖 ${isMonArtist ? 'Monitored' : 'Monitor'}</button>
             <button class="nav-btn" onclick="downloadItem('${escapeJsString(state.artist)}', '${escapeJsString(state.artist)}', 'artist', this)">${downloadLabel}</button>
         </div>
     `);
@@ -2574,6 +2678,7 @@ function createResultCard(item, type) {
             >
             <span class="type-badge">${itemType}</span>
             ${!isArtist ? `<button class="${badgeClass}"${badgeDisabled} title="${badgeTitle}" aria-label="${badgeTitle}"></button>` : ''}
+            ${isArtist ? `<button class="monitor-btn${monitoredArtists.has((title || artist).toLowerCase()) ? ' is-monitored' : ''}" data-artist="${escHtml(title || artist)}" title="${monitoredArtists.has((title || artist).toLowerCase()) ? 'Stop Monitoring' : 'Monitor Artist'}" aria-label="Monitor artist"></button>` : ''}
             ${normalizedType === 'track' ? '<button class="preview-btn preview-overlay-btn" data-state="play" aria-label="Play preview" title="Play preview"></button>' : ''}
         </div>
         <div class="card-content">
@@ -2603,6 +2708,14 @@ function createResultCard(item, type) {
             } else {
                 downloadItem(artist, title, 'track', btn);
             }
+        });
+    }
+
+    const monitorBtn = card.querySelector('.monitor-btn');
+    if (monitorBtn && isArtist) {
+        monitorBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openMonitorModal(title || artist);
         });
     }
 
