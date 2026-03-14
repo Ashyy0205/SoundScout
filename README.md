@@ -97,11 +97,12 @@ When `ENABLE_WEBUI=true` (the default), the container runs as a long-lived web s
 
 ### Acquisition (optional)
 
-SoundScout includes a bundled scraper for acquiring tracks. It always tries services in this order: Tidal, then Qobuz, then Amazon. Credentials for the enabled services are read from `/root/.scraper/config.json` (mount a volume from your host as shown in the Quick Start).
+SoundScout includes a bundled scraper for acquiring tracks from Tidal or Qobuz. Credentials for the service are read from `/root/.scraper/config.json` (mount a volume from your host as shown in the Quick Start).
 
 | Variable | Default | Description |
 |---|---|---|
 | `DISCOVERY_ACQUIRE` | `1` | Set `0` to skip the acquisition step |
+| `SCRAPER_SERVICE` | `tidal` | `tidal` or `qobuz` |
 | `DOWNLOAD_CONCURRENCY` | `6` | Parallel scraper processes |
 | `SCRAPER_WORKERS` | `8` | Goroutine workers per scraper batch |
 
@@ -166,3 +167,19 @@ Three files are written:
 - Each user's recommendations are generated from their own linked Last.fm account — the API credentials identify the SoundScout application, not individual users.
 - The Docker image includes `ffmpeg`. For local development on Windows: `winget install Gyan.FFmpeg`.
 - `WEBUI_PUBLIC_URL` must be reachable from the browser, not just within Docker. Use your host machine's IP, not `localhost` or `127.0.0.1`.
+
+---
+
+## Legal
+
+SoundScout is an independent, open-source project. It is not affiliated with, endorsed by, or connected to Spotify, Tidal, Qobuz, Amazon Music, Last.fm, Plex, or any other platform or service referenced in this project. All product names and trademarks are the property of their respective owners.
+
+This software is intended for **personal and private use only**. The author does not condone piracy or any use of this software that violates applicable law or the Terms of Service of any third-party platform.
+
+By using this software, you accept full and sole responsibility for:
+
+- Verifying that your use is lawful in your country or region
+- Reading and complying with the Terms of Service of any platform this software interacts with
+- Any consequences, including but not limited to account termination, legal action, or financial liability, that result from your use of this tool
+
+This software is provided "as is" and without warranty of any kind, express or implied. The author makes no guarantees regarding fitness for a particular purpose, availability, or continued functionality. The author accepts no liability whatsoever for damages, losses, or legal issues of any kind arising from the use or misuse of this software.
