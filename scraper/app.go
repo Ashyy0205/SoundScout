@@ -116,10 +116,10 @@ type resolvedTrack struct {
 	// ISRC and MusicBrainz identifiers — fetched alongside Spotify metadata in Phase 1.
 	// Used in Phase 2 to enrich the downloaded file's tags so Plex can reliably identify
 	// each track, album, and artist in its online database.
-	isrc        string
-	mbTrackID   string
-	mbAlbumID   string
-	mbArtistID  string
+	isrc       string
+	mbTrackID  string
+	mbAlbumID  string
+	mbArtistID string
 }
 
 // buildAvailableServices returns only the services that have a usable pre-resolved URL.
@@ -1057,10 +1057,10 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 	// This is a lightweight read-modify-write that preserves all existing tags.
 	if !alreadyExists {
 		extraTags := map[string]string{
-			"ISRC":                  req.ISRC,
-			"MUSICBRAINZ_TRACKID":   req.MusicBrainzTrackID,
-			"MUSICBRAINZ_ALBUMID":   req.MusicBrainzAlbumID,
-			"MUSICBRAINZ_ARTISTID":  req.MusicBrainzArtistID,
+			"ISRC":                 req.ISRC,
+			"MUSICBRAINZ_TRACKID":  req.MusicBrainzTrackID,
+			"MUSICBRAINZ_ALBUMID":  req.MusicBrainzAlbumID,
+			"MUSICBRAINZ_ARTISTID": req.MusicBrainzArtistID,
 		}
 		if enrichErr := backend.EnrichFileTags(filename, extraTags); enrichErr != nil {
 			fmt.Fprintf(os.Stderr, "Warning: ISRC/MusicBrainz tag enrichment failed for %s: %v\n",
