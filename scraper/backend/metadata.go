@@ -1153,3 +1153,39 @@ func hasTXXX(tag *id3v2.Tag, description string) bool {
 	}
 	return false
 }
+
+// ReadFileISRC reads the ISRC tag already embedded in a FLAC or MP3 file.
+// Returns an empty string when the tag is absent or the format is unsupported.
+func ReadFileISRC(filePath string) string {
+	ext := strings.ToLower(pathfilepath.Ext(filePath))
+	switch ext {
+	case ".flac":
+		f, err := flac.ParseFile(filePath)
+		if err != nil {
+			return ""
+		}
+		for _, block := range f.Meta {
+			if block.Type != flac.VorbisComment {
+				continue
+			}
+			cmt, err := flacvorbis.ParseFromMetaDataBlock(*block)
+			if err != nil {
+				return ""
+			}
+			vals, _ := cmt.Get("ISRC")
+			if len(vals) > 0 {
+				return vals[0]
+			}
+		}
+	case ".mp3":
+		tag, err := id3v2.Open(filePath, id3v2.Options{Parse: true})
+		if err != nil {
+			return ""
+		}
+		defer tag.Close()
+		if f := tag.GetTextFrame("TSRC"); f.Text != "" {
+			return f.Text
+		}
+	}
+	return ""
+}

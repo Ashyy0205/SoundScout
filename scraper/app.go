@@ -1066,6 +1066,51 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 			fmt.Fprintf(os.Stderr, "Warning: ISRC/MusicBrainz tag enrichment failed for %s: %v\n",
 				filename, enrichErr)
 		}
+
+		// Secondary enrichment: if Phase-1 pre-fetch didn't yield MusicBrainz IDs
+		// (common for indie / niche / non-English tracks), try again using:
+		//   1. The ISRC already embedded by the download service (e.g. Tidal, Qobuz).
+		//   2. AcoustID acoustic fingerprinting (most robust for any track).
+		if req.MusicBrainzTrackID == "" {
+			nativeISRC := backend.ReadFileISRC(filename)
+
+			// Attempt AcoustID fingerprinting first — it works for any language/genre.
+			var mbRec *backend.MBRecording
+			if rec, aErr := backend.LookupAcoustID(filename); aErr == nil && rec != nil {
+				mbRec = rec
+			}
+
+			// Fallback: retry MusicBrainz with the native ISRC if AcoustID didn't help.
+			if mbRec == nil && nativeISRC != "" && nativeISRC != req.ISRC {
+				if rec, mErr := backend.LookupMBByISRC(nativeISRC); mErr == nil && rec != nil {
+					mbRec = rec
+				}
+			}
+
+			// Fallback: retry MusicBrainz by artist+title (uses the improved multi-strategy search).
+			if mbRec == nil {
+				if rec, mErr := backend.SearchMBRecording(req.ArtistName, req.TrackName); mErr == nil && rec != nil {
+					mbRec = rec
+				}
+			}
+
+			if mbRec != nil {
+				secondaryTags := map[string]string{
+					"MUSICBRAINZ_TRACKID":  mbRec.TrackID,
+					"MUSICBRAINZ_ALBUMID":  mbRec.AlbumID,
+					"MUSICBRAINZ_ARTISTID": mbRec.ArtistID,
+				}
+				if mbRec.ISRC != "" {
+					secondaryTags["ISRC"] = mbRec.ISRC
+				} else if nativeISRC != "" {
+					secondaryTags["ISRC"] = nativeISRC
+				}
+				if enrichErr := backend.EnrichFileTags(filename, secondaryTags); enrichErr != nil {
+					fmt.Fprintf(os.Stderr, "Warning: secondary MusicBrainz enrichment failed for %s: %v\n",
+						filename, enrichErr)
+				}
+			}
+		}
 	}
 
 	message := "Download completed successfully"

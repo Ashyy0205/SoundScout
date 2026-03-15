@@ -577,7 +577,7 @@ func (t *TidalDownloader) DownloadByURL(tidalURL, outputDir, quality, filenameFo
 	if err := t.DownloadFile(downloadURL, outputFilename); err != nil {
 		// Clean up partial file
 		os.Remove(outputFilename)
-		
+
 		// Attempt to clean up directory if empty
 		if outputDir != "." {
 			dirEntries, _ := os.ReadDir(outputDir)
@@ -622,7 +622,9 @@ func (t *TidalDownloader) DownloadByURL(tidalURL, outputDir, quality, filenameFo
 		URL:         spotifyURL,
 		Copyright:   spotifyCopyright,
 		Publisher:   spotifyPublisher,
-		Description: "",
+		// Use the ISRC reported by Tidal's own API — it is always present and
+		// authoritative. Plex and MusicBrainz use it for definitive track matching.
+		ISRC: trackInfo.ISRC,
 	}
 
 	if err := EmbedMetadata(outputFilename, metadata, coverPath); err != nil {
@@ -726,7 +728,7 @@ func (t *TidalDownloader) DownloadByURLWithFallback(tidalURL, outputDir, quality
 		URL:         spotifyURL,
 		Copyright:   spotifyCopyright,
 		Publisher:   spotifyPublisher,
-		Description: "",
+		ISRC:        trackInfo.ISRC,
 	}
 
 	if err := EmbedMetadata(outputFilename, metadata, coverPath); err != nil {

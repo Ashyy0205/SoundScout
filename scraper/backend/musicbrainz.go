@@ -104,42 +104,103 @@ func LookupMBByISRC(isrc string) (*MBRecording, error) {
 	return parseMBSearchResult(data, isrc)
 }
 
-// SearchMBRecording searches MusicBrainz by track title and artist name.
-// Only results with a relevance score ≥ 85 are accepted to avoid false positives.
-// Returns nil, nil when no confident match is found.
-func SearchMBRecording(artist, title string) (*MBRecording, error) {
-	if artist == "" || title == "" {
-		return nil, nil
+// hasNonASCII reports whether s contains any non-ASCII rune.
+func hasNonASCII(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return true
+		}
 	}
-	q := fmt.Sprintf(`recording:"%s" AND artistname:"%s"`,
-		strings.ReplaceAll(title, `"`, `\"`),
-		strings.ReplaceAll(artist, `"`, `\"`),
-	)
-	endpoint := fmt.Sprintf("%s/recording?query=%s&fmt=json&limit=1",
-		mbAPIBase, url.QueryEscape(q))
+	return false
+}
 
+// mbScoreOf returns the float score field of a recording map entry.
+func mbScoreOf(recMap map[string]interface{}) float64 {
+	switch v := recMap["score"].(type) {
+	case float64:
+		return v
+	case string:
+		var f float64
+		fmt.Sscanf(v, "%f", &f)
+		return f
+	}
+	return 0
+}
+
+// mbSearchOnce fires a single MusicBrainz recording query and returns the
+// best result if its score meets minScore.
+func mbSearchOnce(q string, minScore float64) (*MBRecording, error) {
+	endpoint := fmt.Sprintf("%s/recording?query=%s&fmt=json&limit=3",
+		mbAPIBase, url.QueryEscape(q))
 	data, err := mbGetJSON(endpoint)
 	if err != nil || data == nil {
 		return nil, err
 	}
-
-	// Reject low-confidence matches.
 	recs, _ := data["recordings"].([]interface{})
-	if len(recs) > 0 {
-		if recMap, ok := recs[0].(map[string]interface{}); ok {
-			score := 0.0
-			switch v := recMap["score"].(type) {
-			case float64:
-				score = v
-			case string:
-				fmt.Sscanf(v, "%f", &score)
-			}
-			if score < 85 {
-				return nil, nil
-			}
+	for _, r := range recs {
+		recMap, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if mbScoreOf(recMap) >= minScore {
+			return parseMBSearchResult(data, "")
+		}
+		break // results are score-sorted; first is best
+	}
+	return nil, nil
+}
+
+// SearchMBRecording searches MusicBrainz by track title and artist name using
+// several progressive strategies to maximise coverage for niche, indie, and
+// non-English track names:
+//
+//  1. Exact quoted Lucene search (score ≥ 85) — most precise.
+//  2. Fuzzy tilde search (score ≥ 75) — handles spelling variants and diacritics.
+//  3. Title-only search (score ≥ 90) — last resort when artist name confuses MB.
+//
+// Returns nil, nil when no confident match is found.
+func SearchMBRecording(artist, title string) (*MBRecording, error) {
+	if title == "" {
+		return nil, nil
+	}
+
+	escape := func(s string) string { return strings.ReplaceAll(s, `"`, `\"`) }
+
+	// Strategy 1: exact quoted search — works best for ASCII names.
+	if artist != "" {
+		q := fmt.Sprintf(`recording:"%s" AND artistname:"%s"`, escape(title), escape(artist))
+		if rec, err := mbSearchOnce(q, 85); rec != nil || err != nil {
+			return rec, err
 		}
 	}
-	return parseMBSearchResult(data, "")
+
+	// Strategy 2: fuzzy tilde search — effective for non-English / transliterated names.
+	// Apply ~ to unquoted tokens so Lucene does edit-distance matching.
+	fuzzyToken := func(s string) string {
+		if hasNonASCII(s) || strings.ContainsAny(s, " ") {
+			// For multi-word or non-ASCII: wrap in quotes, skip tilde (MB doesn't
+			// support tilde on phrases). Use unquoted title token for single words.
+			return `"` + escape(s) + `"`
+		}
+		return escape(s) + "~"
+	}
+	if artist != "" {
+		q := fmt.Sprintf("recording:%s AND artistname:%s", fuzzyToken(title), fuzzyToken(artist))
+		if rec, err := mbSearchOnce(q, 75); rec != nil || err != nil {
+			return rec, err
+		}
+	}
+
+	// Strategy 3: title-only — some non-English artists have variant name spellings
+	// in MusicBrainz that don't match the Spotify name.
+	{
+		q := fmt.Sprintf(`recording:"%s"`, escape(title))
+		if rec, err := mbSearchOnce(q, 90); rec != nil || err != nil {
+			return rec, err
+		}
+	}
+
+	return nil, nil
 }
 
 // EnrichFromMusicBrainz first tries an ISRC lookup; on miss it falls back to a

@@ -485,7 +485,9 @@ func (q *QobuzDownloader) DownloadByISRC(deezerISRC, outputDir, quality, filenam
 		URL:         spotifyURL,
 		Copyright:   spotifyCopyright,
 		Publisher:   spotifyPublisher,
-		Description: "",
+		// deezerISRC is the track's real ISRC obtained from the Deezer catalog.
+		// It is identical to the track's ISRC on every other platform.
+		ISRC: deezerISRC,
 	}
 
 	if err := EmbedMetadata(filepath, metadata, coverPath); err != nil {
