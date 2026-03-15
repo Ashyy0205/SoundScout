@@ -183,6 +183,7 @@ type apiTrackResponse struct {
 	Discs     int    `json:"discs"`
 	Copyright string `json:"copyright"`
 	Plays     string `json:"plays"`
+	ISRC      string `json:"isrc"`
 	Album     struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
@@ -831,7 +832,7 @@ func (c *SpotifyMetadataClient) formatTrackData(raw *apiTrackResponse) TrackResp
 		DiscNumber:  raw.Disc,
 		TotalDiscs:  raw.Discs,
 		ExternalURL: externalURL,
-		ISRC:        raw.ID,
+		ISRC:        raw.ISRC,
 		Copyright:   raw.Copyright,
 		Publisher:   raw.Album.Label,
 		Plays:       raw.Plays,

@@ -800,6 +800,12 @@ func FilterTrack(data map[string]interface{}, albumFetchData ...map[string]inter
 		totalDiscs = discInfo["totalDiscs"].(int)
 	}
 
+	// Extract ISRC from externalIds if the Spotify API serves it.
+	isrc := ""
+	if extIDs := getMap(trackData, "externalIds"); len(extIDs) > 0 {
+		isrc = getString(extIDs, "isrc")
+	}
+
 	filtered := map[string]interface{}{
 		"id":        getString(trackData, "id"),
 		"name":      getString(trackData, "name"),
@@ -812,6 +818,7 @@ func FilterTrack(data map[string]interface{}, albumFetchData ...map[string]inter
 		"copyright": copyrightString,
 		"plays":     getString(trackData, "playcount"),
 		"cover":     cover,
+		"isrc":      isrc,
 	}
 
 	return filtered

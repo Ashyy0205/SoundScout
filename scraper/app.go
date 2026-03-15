@@ -113,6 +113,13 @@ type resolvedTrack struct {
 	totalTracks int
 	totalDiscs  int
 	duration    int
+	// ISRC and MusicBrainz identifiers — fetched alongside Spotify metadata in Phase 1.
+	// Used in Phase 2 to enrich the downloaded file's tags so Plex can reliably identify
+	// each track, album, and artist in its online database.
+	isrc        string
+	mbTrackID   string
+	mbAlbumID   string
+	mbArtistID  string
 }
 
 // buildAvailableServices returns only the services that have a usable pre-resolved URL.
@@ -147,6 +154,7 @@ type spotifyTrackMeta struct {
 	totalTracks int
 	totalDiscs  int
 	duration    int // seconds
+	isrc        string
 }
 
 // fetchSpotifyTrackMeta retrieves full track metadata from Spotify for a given track ID.
@@ -175,6 +183,7 @@ func fetchSpotifyTrackMeta(spotifyID string) (*spotifyTrackMeta, error) {
 			ReleaseDate string `json:"release_date"`
 			DurationMS  int    `json:"duration_ms"`
 			Images      string `json:"images"`
+			ISRC        string `json:"isrc"`
 		} `json:"track"`
 	}
 	jsonData, err := json.Marshal(raw)
@@ -197,6 +206,7 @@ func fetchSpotifyTrackMeta(spotifyID string) (*spotifyTrackMeta, error) {
 		totalTracks: t.TotalTracks,
 		totalDiscs:  t.TotalDiscs,
 		duration:    t.DurationMS / 1000,
+		isrc:        t.ISRC,
 	}
 
 	// Extract the first cover-art URL from the Images field (stored as a JSON array).
@@ -385,6 +395,12 @@ func (a *App) DownloadSongsFromCSV(csvPath string, outputDir string) ([]Download
 			meta, err := fetchSpotifyTrackMeta(rt.spotifyID)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  [meta] prefetch failed for %s: %v\n", rt.spotifyID, err)
+				// Spotify failed — still try MusicBrainz by artist+title as fallback.
+				if mb, mbErr := backend.EnrichFromMusicBrainz(rt.artist, rt.title, ""); mbErr == nil && mb != nil {
+					rt.mbTrackID = mb.TrackID
+					rt.mbAlbumID = mb.AlbumID
+					rt.mbArtistID = mb.ArtistID
+				}
 				return
 			}
 			if rt.albumName == "" && meta.albumName != "" {
@@ -419,6 +435,19 @@ func (a *App) DownloadSongsFromCSV(csvPath string, outputDir string) ([]Download
 			}
 			if rt.duration == 0 && meta.duration != 0 {
 				rt.duration = meta.duration
+			}
+			if rt.isrc == "" && meta.isrc != "" {
+				rt.isrc = meta.isrc
+			}
+			// MusicBrainz enrichment: ISRC lookup first, artist+title search as fallback.
+			// Runs inside the same goroutine so it overlaps with the song.link wait.
+			if mb, mbErr := backend.EnrichFromMusicBrainz(rt.artist, rt.title, rt.isrc); mbErr == nil && mb != nil {
+				rt.mbTrackID = mb.TrackID
+				rt.mbAlbumID = mb.AlbumID
+				rt.mbArtistID = mb.ArtistID
+				if rt.isrc == "" && mb.ISRC != "" {
+					rt.isrc = mb.ISRC
+				}
 			}
 		}()
 	}
@@ -588,6 +617,19 @@ func (a *App) DownloadSongsFromCSV(csvPath string, outputDir string) ([]Download
 				if rt.duration != 0 {
 					req.Duration = rt.duration
 				}
+				// Inject ISRC and MusicBrainz IDs so DownloadTrack can enrich the file tags.
+				if rt.isrc != "" {
+					req.ISRC = rt.isrc
+				}
+				if rt.mbTrackID != "" {
+					req.MusicBrainzTrackID = rt.mbTrackID
+				}
+				if rt.mbAlbumID != "" {
+					req.MusicBrainzAlbumID = rt.mbAlbumID
+				}
+				if rt.mbArtistID != "" {
+					req.MusicBrainzArtistID = rt.mbArtistID
+				}
 
 				resp, dlErr := a.DownloadTrack(req)
 				resp.OriginalArtist = rt.artist
@@ -672,6 +714,10 @@ type DownloadRequest struct {
 	SpotifyTotalDiscs    int    `json:"spotify_total_discs,omitempty"`
 	Copyright            string `json:"copyright,omitempty"`
 	Publisher            string `json:"publisher,omitempty"`
+	// MusicBrainz identifiers embedded as extra tags after download for Plex matching.
+	MusicBrainzTrackID  string `json:"musicbrainz_track_id,omitempty"`
+	MusicBrainzAlbumID  string `json:"musicbrainz_album_id,omitempty"`
+	MusicBrainzArtistID string `json:"musicbrainz_artist_id,omitempty"`
 }
 
 type DownloadResponse struct {
@@ -1004,6 +1050,22 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 	if strings.HasPrefix(filename, "EXISTS:") {
 		alreadyExists = true
 		filename = strings.TrimPrefix(filename, "EXISTS:")
+	}
+
+	// Enrich the downloaded file with ISRC and MusicBrainz identifiers so Plex can
+	// definitively match the track, album, and artist in its online database.
+	// This is a lightweight read-modify-write that preserves all existing tags.
+	if !alreadyExists {
+		extraTags := map[string]string{
+			"ISRC":                  req.ISRC,
+			"MUSICBRAINZ_TRACKID":   req.MusicBrainzTrackID,
+			"MUSICBRAINZ_ALBUMID":   req.MusicBrainzAlbumID,
+			"MUSICBRAINZ_ARTISTID":  req.MusicBrainzArtistID,
+		}
+		if enrichErr := backend.EnrichFileTags(filename, extraTags); enrichErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: ISRC/MusicBrainz tag enrichment failed for %s: %v\n",
+				filename, enrichErr)
+		}
 	}
 
 	message := "Download completed successfully"

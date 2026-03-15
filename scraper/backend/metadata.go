@@ -31,6 +31,12 @@ type Metadata struct {
 	Publisher   string
 	Lyrics      string
 	Description string
+	// ISRC is the International Standard Recording Code (e.g. "GBUM71029604").
+	ISRC string
+	// MusicBrainz identifiers used by Plex for definitive track/album/artist matching.
+	MusicBrainzTrackID  string // recording MBID → MUSICBRAINZ_TRACKID
+	MusicBrainzAlbumID  string // release MBID  → MUSICBRAINZ_ALBUMID
+	MusicBrainzArtistID string // artist MBID   → MUSICBRAINZ_ARTISTID
 }
 
 func EmbedMetadata(filepath string, metadata Metadata, coverPath string) error {
@@ -82,12 +88,23 @@ func EmbedMetadata(filepath string, metadata Metadata, coverPath string) error {
 	if metadata.Publisher != "" {
 		_ = cmt.Add("PUBLISHER", metadata.Publisher)
 	}
-	if metadata.Description != "" {
-		_ = cmt.Add("DESCRIPTION", metadata.Description)
-	}
+	// DESCRIPTION/COMMENT fields are intentionally not written — any comment
+	// injected by the audio source (e.g. ripping credits) is dropped on purpose.
 
 	if metadata.Lyrics != "" {
 		_ = cmt.Add("LYRICS", metadata.Lyrics)
+	}
+	if metadata.ISRC != "" {
+		_ = cmt.Add("ISRC", metadata.ISRC)
+	}
+	if metadata.MusicBrainzTrackID != "" {
+		_ = cmt.Add("MUSICBRAINZ_TRACKID", metadata.MusicBrainzTrackID)
+	}
+	if metadata.MusicBrainzAlbumID != "" {
+		_ = cmt.Add("MUSICBRAINZ_ALBUMID", metadata.MusicBrainzAlbumID)
+	}
+	if metadata.MusicBrainzArtistID != "" {
+		_ = cmt.Add("MUSICBRAINZ_ARTISTID", metadata.MusicBrainzArtistID)
 	}
 
 	cmtBlock := cmt.Marshal()
@@ -184,7 +201,8 @@ func EmbedLyricsOnly(filepath string, lyrics string) error {
 			parts := strings.SplitN(comment, "=", 2)
 			if len(parts) == 2 {
 				fieldName := strings.ToUpper(parts[0])
-				if fieldName != "LYRICS" && fieldName != "UNSYNCEDLYRICS" && fieldName != "SYNCEDLYRICS" {
+				if fieldName != "LYRICS" && fieldName != "UNSYNCEDLYRICS" && fieldName != "SYNCEDLYRICS" &&
+					fieldName != "COMMENT" && fieldName != "DESCRIPTION" {
 					_ = cmt.Add(parts[0], parts[1])
 				}
 			}
@@ -807,6 +825,8 @@ func embedMetadataToMP3(filePath string, metadata Metadata, coverPath string) er
 	defer tag.Close()
 
 	tag.DeleteFrames("TXXX")
+	// Strip all comment frames embedded by the audio source.
+	tag.DeleteFrames("COMM")
 
 	if metadata.Title != "" {
 		tag.SetTitle(metadata.Title)
@@ -856,6 +876,32 @@ func embedMetadataToMP3(filePath string, metadata Metadata, coverPath string) er
 	if metadata.Publisher != "" {
 		tag.DeleteFrames("TPUB")
 		tag.AddTextFrame("TPUB", id3v2.EncodingUTF8, metadata.Publisher)
+	}
+
+	if metadata.ISRC != "" {
+		tag.DeleteFrames("TSRC")
+		tag.AddTextFrame("TSRC", id3v2.EncodingUTF8, metadata.ISRC)
+	}
+	if metadata.MusicBrainzTrackID != "" {
+		tag.AddFrame("TXXX", id3v2.UserDefinedTextFrame{
+			Encoding:    id3v2.EncodingUTF8,
+			Description: "MusicBrainz Track Id",
+			Value:       metadata.MusicBrainzTrackID,
+		})
+	}
+	if metadata.MusicBrainzAlbumID != "" {
+		tag.AddFrame("TXXX", id3v2.UserDefinedTextFrame{
+			Encoding:    id3v2.EncodingUTF8,
+			Description: "MusicBrainz Album Id",
+			Value:       metadata.MusicBrainzAlbumID,
+		})
+	}
+	if metadata.MusicBrainzArtistID != "" {
+		tag.AddFrame("TXXX", id3v2.UserDefinedTextFrame{
+			Encoding:    id3v2.EncodingUTF8,
+			Description: "MusicBrainz Artist Id",
+			Value:       metadata.MusicBrainzArtistID,
+		})
 	}
 
 	if coverPath != "" && fileExists(coverPath) {
@@ -941,6 +987,21 @@ func embedMetadataToM4A(filePath string, metadata Metadata, coverPath string) er
 	if metadata.Publisher != "" {
 		args = append(args, "-metadata", "publisher="+metadata.Publisher)
 	}
+	if metadata.ISRC != "" {
+		args = append(args, "-metadata", "isrc="+metadata.ISRC)
+	}
+	if metadata.MusicBrainzTrackID != "" {
+		args = append(args, "-metadata", "musicbrainz_trackid="+metadata.MusicBrainzTrackID)
+	}
+	if metadata.MusicBrainzAlbumID != "" {
+		args = append(args, "-metadata", "musicbrainz_albumid="+metadata.MusicBrainzAlbumID)
+	}
+	if metadata.MusicBrainzArtistID != "" {
+		args = append(args, "-metadata", "musicbrainz_artistid="+metadata.MusicBrainzArtistID)
+	}
+	// Explicitly clear comment fields that may have been embedded by the audio source.
+	args = append(args, "-metadata", "comment=")
+	args = append(args, "-metadata", "description=")
 
 	tmpOutputFile := strings.TrimSuffix(filePath, pathfilepath.Ext(filePath)) + ".tmp" + pathfilepath.Ext(filePath)
 	defer func() {
@@ -964,4 +1025,131 @@ func embedMetadataToM4A(filePath string, metadata Metadata, coverPath string) er
 	}
 
 	return nil
+}
+
+// EnrichFileTags adds tags to an already-written audio file without overwriting
+// any of the existing tags. It is used as a post-download step to embed ISRC and
+// MusicBrainz identifiers that were not available at the time of initial tagging.
+// Supported formats: FLAC and MP3.  M4A is a no-op (requires a full re-encode).
+func EnrichFileTags(filePath string, tags map[string]string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	ext := strings.ToLower(pathfilepath.Ext(filePath))
+	switch ext {
+	case ".flac":
+		return enrichFlacTags(filePath, tags)
+	case ".mp3":
+		return enrichMP3Tags(filePath, tags)
+	default:
+		return nil
+	}
+}
+
+func enrichFlacTags(filePath string, tags map[string]string) error {
+	f, err := flac.ParseFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to parse FLAC: %w", err)
+	}
+
+	// Locate the existing vorbis comment block (if any).
+	var existingCmt *flacvorbis.MetaDataBlockVorbisComment
+	cmtIdx := -1
+	for idx, block := range f.Meta {
+		if block.Type == flac.VorbisComment {
+			cmtIdx = idx
+			existingCmt, _ = flacvorbis.ParseFromMetaDataBlock(*block)
+			break
+		}
+	}
+
+	// Build a new comment block that preserves all existing tags except comment fields.
+	cmt := flacvorbis.New()
+	existingKeys := make(map[string]bool)
+	if existingCmt != nil {
+		for _, comment := range existingCmt.Comments {
+			if parts := strings.SplitN(comment, "=", 2); len(parts) == 2 {
+				fieldName := strings.ToUpper(parts[0])
+				if fieldName == "COMMENT" || fieldName == "DESCRIPTION" {
+					continue
+				}
+				cmt.Comments = append(cmt.Comments, comment)
+				existingKeys[fieldName] = true
+			}
+		}
+	}
+
+	// Append any incoming tag that is not already present.
+	for key, val := range tags {
+		if val != "" && !existingKeys[strings.ToUpper(key)] {
+			_ = cmt.Add(strings.ToUpper(key), val)
+		}
+	}
+
+	block := cmt.Marshal()
+	if cmtIdx < 0 {
+		f.Meta = append(f.Meta, &block)
+	} else {
+		f.Meta[cmtIdx] = &block
+	}
+	return f.Save(filePath)
+}
+
+func enrichMP3Tags(filePath string, tags map[string]string) error {
+	tag, err := id3v2.Open(filePath, id3v2.Options{Parse: true})
+	if err != nil {
+		return fmt.Errorf("failed to open MP3: %w", err)
+	}
+	defer tag.Close()
+
+	// Remove any comment frames left by the audio source.
+	tag.DeleteFrames("COMM")
+
+	for key, val := range tags {
+		if val == "" {
+			continue
+		}
+		switch strings.ToUpper(key) {
+		case "ISRC":
+			if tag.GetTextFrame("TSRC").Text == "" {
+				tag.DeleteFrames("TSRC")
+				tag.AddTextFrame("TSRC", id3v2.EncodingUTF8, val)
+			}
+		case "MUSICBRAINZ_TRACKID":
+			if !hasTXXX(tag, "MusicBrainz Track Id") {
+				tag.AddFrame("TXXX", id3v2.UserDefinedTextFrame{
+					Encoding:    id3v2.EncodingUTF8,
+					Description: "MusicBrainz Track Id",
+					Value:       val,
+				})
+			}
+		case "MUSICBRAINZ_ALBUMID":
+			if !hasTXXX(tag, "MusicBrainz Album Id") {
+				tag.AddFrame("TXXX", id3v2.UserDefinedTextFrame{
+					Encoding:    id3v2.EncodingUTF8,
+					Description: "MusicBrainz Album Id",
+					Value:       val,
+				})
+			}
+		case "MUSICBRAINZ_ARTISTID":
+			if !hasTXXX(tag, "MusicBrainz Artist Id") {
+				tag.AddFrame("TXXX", id3v2.UserDefinedTextFrame{
+					Encoding:    id3v2.EncodingUTF8,
+					Description: "MusicBrainz Artist Id",
+					Value:       val,
+				})
+			}
+		}
+	}
+	return tag.Save()
+}
+
+// hasTXXX reports whether the tag already contains a TXXX frame with the given description.
+func hasTXXX(tag *id3v2.Tag, description string) bool {
+	for _, f := range tag.GetFrames("TXXX") {
+		if txxx, ok := f.(id3v2.UserDefinedTextFrame); ok && txxx.Description == description {
+			return true
+		}
+	}
+	return false
 }
