@@ -1154,6 +1154,59 @@ func hasTXXX(tag *id3v2.Tag, description string) bool {
 	return false
 }
 
+// StripCommentTags removes COMMENT and DESCRIPTION Vorbis fields from a FLAC
+// file, and the COMM frame from an MP3, without touching any other tag.
+// It is safe to call on files that were downloaded before the no-comment policy
+// was in effect.
+func StripCommentTags(filePath string) error {
+	ext := strings.ToLower(pathfilepath.Ext(filePath))
+	switch ext {
+	case ".flac":
+		f, err := flac.ParseFile(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to parse FLAC: %w", err)
+		}
+		for idx, block := range f.Meta {
+			if block.Type != flac.VorbisComment {
+				continue
+			}
+			cmt, err := flacvorbis.ParseFromMetaDataBlock(*block)
+			if err != nil {
+				return err
+			}
+			newCmt := flacvorbis.New()
+			changed := false
+			for _, c := range cmt.Comments {
+				if parts := strings.SplitN(c, "=", 2); len(parts) == 2 {
+					if k := strings.ToUpper(parts[0]); k == "COMMENT" || k == "DESCRIPTION" {
+						changed = true
+						continue
+					}
+				}
+				newCmt.Comments = append(newCmt.Comments, c)
+			}
+			if !changed {
+				return nil // nothing to do
+			}
+			newBlock := newCmt.Marshal()
+			f.Meta[idx] = &newBlock
+			return f.Save(filePath)
+		}
+	case ".mp3":
+		tag, err := id3v2.Open(filePath, id3v2.Options{Parse: true})
+		if err != nil {
+			return fmt.Errorf("failed to open MP3: %w", err)
+		}
+		defer tag.Close()
+		if len(tag.GetFrames("COMM")) == 0 {
+			return nil // nothing to do
+		}
+		tag.DeleteFrames("COMM")
+		return tag.Save()
+	}
+	return nil
+}
+
 // ReadFileISRC reads the ISRC tag already embedded in a FLAC or MP3 file.
 // Returns an empty string when the tag is absent or the format is unsupported.
 func ReadFileISRC(filePath string) string {

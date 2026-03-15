@@ -1055,6 +1055,12 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 	// Enrich the downloaded file with ISRC and MusicBrainz identifiers so Plex can
 	// definitively match the track, album, and artist in its online database.
 	// This is a lightweight read-modify-write that preserves all existing tags.
+	// Strip comment tags unconditionally — this also cleans up files that were
+	// downloaded before the no-comment policy was enforced (alreadyExists path).
+	if stripErr := backend.StripCommentTags(filename); stripErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: comment tag strip failed for %s: %v\n", filename, stripErr)
+	}
+
 	if !alreadyExists {
 		extraTags := map[string]string{
 			"ISRC":                 req.ISRC,

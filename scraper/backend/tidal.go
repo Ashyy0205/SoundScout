@@ -511,7 +511,10 @@ func (t *TidalDownloader) DownloadFromManifest(manifestB64, outputPath string) e
 		return fmt.Errorf("invalid ffmpeg executable: %w", err)
 	}
 
-	cmd := exec.Command(ffmpegPath, "-y", "-i", tempPath, "-vn", "-c:a", "flac", outputPath)
+	// -map_metadata -1 discards all metadata from the Tidal M4A so that no
+	// comment/description tags injected by the source survive into the FLAC.
+	// EmbedMetadata (called by the caller) then writes clean tags from scratch.
+	cmd := exec.Command(ffmpegPath, "-y", "-i", tempPath, "-vn", "-c:a", "flac", "-map_metadata", "-1", outputPath)
 	setHideWindow(cmd)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
