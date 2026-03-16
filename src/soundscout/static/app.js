@@ -137,33 +137,40 @@ let monitoredArtists = new Set(); // lowercase artist names currently being moni
 let _monitorModalArtist = null;    // artist name the open modal refers to
 
 // ── In-memory view-data cache ────────────────────────────────────────────────
-// Stores the last successful API response for heavy views so navigating away
-// and back is instant.  The server also caches these but the JS cache avoids
-// the round-trip entirely.
-const _viewDataCache = {
-    recommendations: { data: null, ts: 0, ttlMs: 5 * 60 * 1000 },
-    library:         { data: null, ts: 0, ttlMs: 5 * 60 * 1000 },
+// Persistent view-data cache backed by localStorage so that navigating away
+// and returning — even across full page reloads — is instant.
+// Bump _CACHE_VERSION whenever the stored shape changes to auto-invalidate.
+const _CACHE_VERSION = 1;
+const _CACHE_TTLS = {
+    home:      24 * 60 * 60 * 1000,  // 24 h — background worker refreshes daily
+    library:   30 * 60 * 1000,        // 30 min — mtime-based server scan
+    downloads:  2 * 60 * 1000,        // 2 min — active pipeline state
 };
 
 function _cacheGet(key) {
-    const e = _viewDataCache[key];
-    if (!e || !e.data) return null;
-    if (Date.now() - e.ts > e.ttlMs) return null;
-    return e.data;
+    try {
+        const raw = localStorage.getItem(`ss_cache_${key}`);
+        if (!raw) return null;
+        const { v, ts, data } = JSON.parse(raw);
+        if (v !== _CACHE_VERSION) return null;
+        const ttl = _CACHE_TTLS[key];
+        if (ttl && Date.now() - ts > ttl) return null;
+        return data;
+    } catch (_) { return null; }
 }
 
 function _cacheSet(key, data) {
-    const e = _viewDataCache[key];
-    if (!e) return;
-    e.data = data;
-    e.ts = Date.now();
+    try {
+        localStorage.setItem(`ss_cache_${key}`, JSON.stringify({
+            v: _CACHE_VERSION,
+            ts: Date.now(),
+            data,
+        }));
+    } catch (_) { /* quota exceeded or private-browsing mode — silently skip */ }
 }
 
 function _cacheInvalidate(key) {
-    const e = _viewDataCache[key];
-    if (!e) return;
-    e.data = null;
-    e.ts = 0;
+    try { localStorage.removeItem(`ss_cache_${key}`); } catch (_) {}
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -845,10 +852,18 @@ async function openDownloads() {
     const resultsContainer = document.getElementById('resultsContainer');
     if (resultsContainer) resultsContainer.innerHTML = '';
     setResultsMode('list');
-    setLoading(true, 'Loading downloads…');
     setViewHeader(`
         <div class="view-title">Downloads</div>
     `);
+
+    // Show cached state immediately so navigation feels instant.
+    const cached = _cacheGet('downloads');
+    if (cached) {
+        setLoading(false);
+        renderDownloadsView(cached);
+    } else {
+        setLoading(true, 'Loading downloads…');
+    }
 
     try {
         const data = await apiFetchJson('/api/downloads');
@@ -861,15 +876,17 @@ async function openDownloads() {
         const visSummary = data.summary
             ? { ...data.summary, active: visRunning + visQueued, running: visRunning, queued: visQueued }
             : {};
-        renderDownloadsView({
+        const state = {
             jobs:    visJobs,
             summary: visSummary,
             history: visHistory,
             is_admin: !!(data && data.is_admin),
-        });
+        };
+        _cacheSet('downloads', state);
+        renderDownloadsView(state);
     } catch (e) {
         if (!isActiveView('downloads', token)) return;
-        setLoading(false);
+        if (!cached) setLoading(false);
         showError('Failed to load downloads.');
     }
 }

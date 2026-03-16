@@ -71,6 +71,16 @@ def _builtin_spotify_client_id() -> str:
 
 SEARCH_PROVIDER = os.environ.get("SEARCH_PROVIDER", "lastfm").strip().lower()
 
+# Persistent config/cache directory (survives container restarts when bind-mounted).
+# Override with CONFIG_PATH env var; defaults to /config inside Docker.
+def _config_dir() -> Path:
+    p = Path(os.environ.get("CONFIG_PATH", "/config"))
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return p
+
 # Clamp displayed download speed (Mbps) to avoid absurd spikes from instantaneous estimates.
 try:
     WEBUI_SPEED_MBPS_CAP = float((os.environ.get("WEBUI_SPEED_MBPS_CAP", "1000") or "1000").strip())
@@ -1789,17 +1799,54 @@ _TRACK_COVER_CACHE_TTL_SECONDS = 60 * 60
 _track_cover_cache: dict[str, tuple[float, str, str]] = {}  # key -> (ts, url, album_name)
 _TRACK_COVER_CACHE_MAX = 2048
 
-# Library disk-scan cache: avoid re-walking the filesystem on every request.
-_LIBRARY_SCAN_CACHE_TTL_SECONDS = 5 * 60
+# Library disk-scan cache: keyed by root path, invalidated when directory mtimes change.
+# The TTL acts as a safety-net ceiling even when mtime detection is unavailable.
+_LIBRARY_SCAN_CACHE_TTL_SECONDS = 15 * 60
 _library_scan_cache: dict[str, tuple[float, dict]] = {}
+# Mtime snapshot used to detect filesystem changes without a full re-walk.
+# Keys: root path, value: frozenset of (path, mtime) pairs for root + first-level dirs.
+_library_mtime_snapshot: dict[str, frozenset] = {}
 
 # Recommendations response cache: per-user, keyed by Last.fm username.
 _RECOMMENDATIONS_CACHE_TTL_SECONDS = 5 * 60
 _recommendations_cache: dict[str, tuple[float, list]] = {}
 
 # Home shelves cache: per-user (or "__anon__" for logged-out), keyed by Last.fm username.
-_HOME_CACHE_TTL_SECONDS = 10 * 60
+# TTL is 24 h — a background worker pre-populates this daily so page loads are instant.
+_HOME_CACHE_TTL_SECONDS = 24 * 60 * 60
 _home_cache: dict[str, tuple[float, list]] = {}
+
+# Background home-refresh worker (runs once at startup then every 24 h).
+_home_refresh_worker: threading.Thread | None = None
+_home_refresh_worker_lock = threading.Lock()
+
+
+def _home_disk_cache_path(cache_key: str) -> Path:
+    slug = re.sub(r"[^a-zA-Z0-9_-]", "_", cache_key)[:48]
+    return _config_dir() / f"home_cache_{slug}.json"
+
+
+def _load_home_disk_cache(cache_key: str) -> tuple[float, list] | None:
+    """Return (timestamp, shelves) from disk, or None if absent/corrupt."""
+    try:
+        p = _home_disk_cache_path(cache_key)
+        if not p.exists():
+            return None
+        raw = p.read_text(encoding="utf-8")
+        obj = json.loads(raw)
+        ts = float(obj["ts"])
+        shelves = list(obj["shelves"])
+        return ts, shelves
+    except Exception:
+        return None
+
+
+def _save_home_disk_cache(cache_key: str, shelves: list) -> None:
+    try:
+        p = _home_disk_cache_path(cache_key)
+        p.write_text(json.dumps({"ts": time.time(), "shelves": shelves}), encoding="utf-8")
+    except Exception as exc:
+        logger.debug("Could not write home disk cache: %s", exc)
 
 
 def _plex_music_library_name() -> str:
@@ -1972,6 +2019,30 @@ def _is_disc_folder(name: str) -> bool:
     return bool(re.match(r"^(cd|disc|disk)\s*\d+$", s))
 
 
+def _library_dir_snapshot(root: Path) -> frozenset:
+    """Cheaply capture mtime for root + every first-level (artist) directory.
+
+    Adding a new album under an existing artist updates the artist dir's mtime.
+    Adding a brand-new artist updates root's mtime.  Checking two levels is
+    enough to detect virtually all downloads without a full recursive walk.
+    """
+    pairs: list[tuple[str, float]] = []
+    try:
+        pairs.append((str(root), root.stat().st_mtime))
+    except OSError:
+        return frozenset()
+    try:
+        for child in root.iterdir():
+            if child.is_dir():
+                try:
+                    pairs.append((str(child), child.stat().st_mtime))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return frozenset(pairs)
+
+
 def _iter_library_album_entries(root: Path) -> dict[tuple[str, str], dict]:
     """Return a mapping of (artist, album) -> info based on files on disk.
 
@@ -2094,18 +2165,28 @@ def library_albums():
         limit = 500
     limit = max(1, min(limit, 5000))
 
-    # Use an in-memory scan cache to avoid re-walking the entire filesystem on
-    # every request.  The cache is keyed by the library root path and has a
-    # short TTL so newly downloaded albums appear within a few minutes.
+    # Use a mtime-snapshot + TTL-ceiling cache to avoid re-walking the filesystem
+    # on every request.  We compare a cheap two-level directory mtime snapshot
+    # (root + first-level artist dirs) against the last-seen snapshot.  The full
+    # re-walk is triggered only when something actually changed on disk, or when
+    # the safety-ceiling TTL expires.
     _scan_cache_key = str(MUSIC_LIBRARY_PATH)
     _now = time.time()
     _cached_scan = _library_scan_cache.get(_scan_cache_key)
-    if _cached_scan and (_now - _cached_scan[0]) < _LIBRARY_SCAN_CACHE_TTL_SECONDS:
+    _current_snapshot = _library_dir_snapshot(MUSIC_LIBRARY_PATH)
+    _cached_snapshot = _library_mtime_snapshot.get(_scan_cache_key)
+    _cache_fresh = (
+        _cached_scan is not None
+        and (_now - _cached_scan[0]) < _LIBRARY_SCAN_CACHE_TTL_SECONDS
+        and _cached_snapshot == _current_snapshot
+    )
+    if _cache_fresh:
         # Shallow-copy each value dict so downstream mutations don't corrupt the cache.
         albums_map = {k: dict(v) for k, v in _cached_scan[1].items()}
     else:
         raw_map = _iter_library_album_entries(MUSIC_LIBRARY_PATH)
         _library_scan_cache[_scan_cache_key] = (_now, raw_map)
+        _library_mtime_snapshot[_scan_cache_key] = _current_snapshot
         albums_map = {k: dict(v) for k, v in raw_map.items()}
     items = list(albums_map.values())
 
@@ -2434,11 +2515,17 @@ def _build_library_index(root: Path) -> tuple[set[str], set[str], list[str], dic
 def _get_library_index() -> tuple[set[str], set[str], list[str], dict[str, Path]]:
     now = time.time()
     root_str = str(MUSIC_LIBRARY_PATH)
+    current_snapshot = _library_dir_snapshot(MUSIC_LIBRARY_PATH)
 
     # Fast path: check without the lock first to avoid contention on cache hits.
     ts = float(_library_index_cache.get("ts", 0.0) or 0.0)
     cached_root = str(_library_index_cache.get("root", "") or "")
-    if cached_root == root_str and (now - ts) < _LIBRARY_CACHE_TTL_SECONDS:
+    cached_snapshot = _library_index_cache.get("snapshot")
+    if (
+        cached_root == root_str
+        and (now - ts) < _LIBRARY_CACHE_TTL_SECONDS
+        and cached_snapshot == current_snapshot
+    ):
         return (
             _library_index_cache.get("track_keys", set()),
             _library_index_cache.get("album_keys", set()),
@@ -2451,7 +2538,12 @@ def _get_library_index() -> tuple[set[str], set[str], list[str], dict[str, Path]
         # Re-check inside the lock — another thread may have built it while we waited.
         ts = float(_library_index_cache.get("ts", 0.0) or 0.0)
         cached_root = str(_library_index_cache.get("root", "") or "")
-        if cached_root == root_str and (now - ts) < _LIBRARY_CACHE_TTL_SECONDS:
+        cached_snapshot = _library_index_cache.get("snapshot")
+        if (
+            cached_root == root_str
+            and (now - ts) < _LIBRARY_CACHE_TTL_SECONDS
+            and cached_snapshot == current_snapshot
+        ):
             return (
                 _library_index_cache.get("track_keys", set()),
                 _library_index_cache.get("album_keys", set()),
@@ -2462,6 +2554,7 @@ def _get_library_index() -> tuple[set[str], set[str], list[str], dict[str, Path]
         track_keys, album_keys, norm_paths, track_files = _build_library_index(MUSIC_LIBRARY_PATH)
         _library_index_cache["ts"] = time.time()
         _library_index_cache["root"] = root_str
+        _library_index_cache["snapshot"] = current_snapshot
         _library_index_cache["track_keys"] = track_keys
         _library_index_cache["album_keys"] = album_keys
         _library_index_cache["norm_paths"] = norm_paths
@@ -4261,36 +4354,15 @@ def recommendations():
     return jsonify({"items": items})
 
 
-@app.route("/api/home", methods=["GET"])
-def home_shelves():
-    """Return shelf-based home page content (horizontal scrolling rows).
+def _build_home_shelves(username: str) -> list[dict]:
+    """Fetch and enrich all home shelves for *username* (empty string = anonymous).
 
-    Query params:
-        bust: if truthy, bypass the server-side cache.
-
-    Response:
-        {"shelves": [ {"id": str, "title": str, "items": [...]} ]}
-
-    If Last.fm is linked the response includes:
-      - "For You" recommendations shelf (tracks not yet in library)
-      - Up to 2 "Because you like [Artist]" shelves based on recent top artists
-      - A "Global Chart" shelf
-    If Last.fm is not linked or the user has no account:
-      - "Global Chart" shelf
-      - "UK Chart" shelf
+    This is the heavyweight Last.fm + cover-enrichment operation that may take
+    10–30 seconds on the first run.  Call it from the background refresh worker
+    or as a one-off synchronous fallback for cold-cache first requests.
     """
-    bust_cache = bool(request.args.get("bust", ""))
-
     if not LASTFM_API_KEY:
-        return jsonify({"shelves": []})
-
-    username = _get_linked_lastfm_username()
-    cache_key = (username or "__anon__").lower().strip()
-
-    if not bust_cache:
-        cached = _home_cache.get(cache_key)
-        if cached and (time.time() - cached[0]) < _HOME_CACHE_TTL_SECONDS:
-            return jsonify({"shelves": cached[1], "cached": True})
+        return []
 
     lastfm = LastFmClient(api_key=LASTFM_API_KEY, username=username or "")
     shelves: list[dict] = []
@@ -4402,10 +4474,10 @@ def home_shelves():
         except Exception as e:
             logger.warning("Home: UK chart shelf failed: %s", e)
 
-    # --- Enrich first 20 covers per shelf concurrently ---
+    # --- Enrich all covers per shelf concurrently ---
     def _enrich_shelf_covers(shelf: dict) -> None:
         items = shelf.get("items", [])
-        enrich_n = len(items)  # enrich all items, not just first 20
+        enrich_n = len(items)
 
         def _enrich_one(idx: int) -> tuple[int, str, str]:
             it = items[idx]
@@ -4453,10 +4525,104 @@ def home_shelves():
     except Exception:
         pass
 
+    return shelves
+
+
+def _refresh_home_for_key(cache_key: str, username: str) -> None:
+    """Rebuild home shelves for one user and persist to memory + disk."""
     try:
-        _home_cache[cache_key] = (time.time(), shelves)
-    except Exception:
-        pass
+        shelves = _build_home_shelves(username)
+        now = time.time()
+        _home_cache[cache_key] = (now, shelves)
+        _save_home_disk_cache(cache_key, shelves)
+        logger.debug("Home cache refreshed for '%s'", cache_key)
+    except Exception as exc:
+        logger.warning("Home refresh failed for '%s': %s", cache_key, exc)
+
+
+def _home_refresh_loop() -> None:
+    """Background daemon: refresh home shelves for all known users every 24 h.
+
+    Runs immediately at startup so the cache is warm before any user opens the
+    home page, then sleeps 24 h between subsequent refreshes.
+    """
+    while True:
+        try:
+            # Refresh anonymous (global chart always present).
+            _refresh_home_for_key("__anon__", "")
+            # Refresh each Last.fm-linked user found in the user store.
+            try:
+                with _user_store_lock:
+                    store = _load_user_store()
+                for user_entry in store.values():
+                    if not isinstance(user_entry, dict):
+                        continue
+                    lf = user_entry.get("lastfm") or {}
+                    if not isinstance(lf, dict):
+                        continue
+                    uname = (lf.get("username") or "").strip()
+                    if uname:
+                        _refresh_home_for_key(uname.lower(), uname)
+            except Exception as exc:
+                logger.warning("Home refresh: user store scan failed: %s", exc)
+        except Exception as exc:
+            logger.warning("Home refresh loop error: %s", exc)
+        time.sleep(24 * 60 * 60)
+
+
+def _ensure_home_refresh_worker() -> None:
+    global _home_refresh_worker
+    with _home_refresh_worker_lock:
+        if _home_refresh_worker and _home_refresh_worker.is_alive():
+            return
+        _home_refresh_worker = threading.Thread(
+            target=_home_refresh_loop, daemon=True, name="home-refresh-worker"
+        )
+        _home_refresh_worker.start()
+        logger.info("Home refresh worker started")
+
+
+@app.route("/api/home", methods=["GET"])
+def home_shelves():
+    """Return shelf-based home page content (horizontal scrolling rows).
+
+    Query params:
+        bust: if truthy, bypass the server-side cache and force a synchronous rebuild.
+
+    Response:
+        {"shelves": [ {"id": str, "title": str, "items": [...]} ]}
+
+    The data is normally pre-populated by the daily background refresh worker so
+    that this endpoint is always served from cache.  On a cold start (no cache at
+    all) it falls back to a synchronous build.
+    """
+    bust_cache = bool(request.args.get("bust", ""))
+
+    if not LASTFM_API_KEY:
+        return jsonify({"shelves": []})
+
+    username = _get_linked_lastfm_username()
+    cache_key = (username or "__anon__").lower().strip()
+
+    if not bust_cache:
+        # 1. In-memory hit (fastest — no I/O).
+        cached = _home_cache.get(cache_key)
+        if cached and (time.time() - cached[0]) < _HOME_CACHE_TTL_SECONDS:
+            return jsonify({"shelves": cached[1], "cached": True})
+
+        # 2. Disk hit — survive server restarts.
+        disk = _load_home_disk_cache(cache_key)
+        if disk:
+            ts, shelves = disk
+            if (time.time() - ts) < _HOME_CACHE_TTL_SECONDS:
+                _home_cache[cache_key] = (ts, shelves)  # warm the memory layer
+                return jsonify({"shelves": shelves, "cached": True})
+
+    # 3. Full synchronous build (first startup / bust request).
+    shelves = _build_home_shelves(username)
+    now = time.time()
+    _home_cache[cache_key] = (now, shelves)
+    _save_home_disk_cache(cache_key, shelves)
 
     return jsonify({"shelves": shelves})
 
@@ -5459,6 +5625,7 @@ def run_webui(host="0.0.0.0", port=5000):
     if _download_queue:
         _ensure_download_worker()
     _ensure_monitor_worker()
+    _ensure_home_refresh_worker()
     logger.info(f"Starting Web UI on {host}:{port}")
     app.run(host=host, port=port, debug=False)
 
