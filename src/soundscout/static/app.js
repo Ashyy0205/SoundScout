@@ -3358,21 +3358,40 @@ async function startScoutListen(token) {
     if (btnEl) btnEl.disabled = true;
     if (labelEl) { labelEl.textContent = 'TAP ALLOW ON THE POPUP…'; }
 
+    // Request full-spectrum audio by explicitly disabling every voice-processing
+    // preset the browser/OS applies by default.  On mobile these presets
+    // (noise suppression, echo cancellation, AGC) are tuned for phone calls and
+    // aggressively filter out music frequencies, which breaks recognition.
+    // We fall back to plain { audio: true } if the constrained request fails.
+    const _audioConstraints = {
+        echoCancellation:  false,   // removes music components that "echo" the speaker
+        noiseSuppression:  false,   // voice-only filter kills instrumental content
+        autoGainControl:   false,   // AGC causes pumping artefacts on steady music
+        channelCount:      { ideal: 1 },
+        sampleRate:        { ideal: 44100 },
+    };
+
     let stream;
     try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    } catch (e) {
-        if (btnEl) btnEl.disabled = false;
-        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
-            _renderScoutMicBlocked(token);
-        } else if (e.name === 'NotFoundError') {
-            _renderScoutError(token, 'No microphone found on this device.');
-        } else if (e.name === 'SecurityError') {
-            _renderScoutError(token, 'A secure (HTTPS) connection is required to access the microphone.');
-        } else {
-            _renderScoutError(token, 'Could not access microphone: ' + e.name);
+        stream = await navigator.mediaDevices.getUserMedia({ audio: _audioConstraints, video: false });
+    } catch (_constraintErr) {
+        // Some browsers reject unknown constraints — retry with bare audio.
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        } catch (e) {
+            stream = null;
+            if (btnEl) btnEl.disabled = false;
+            if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+                _renderScoutMicBlocked(token);
+            } else if (e.name === 'NotFoundError') {
+                _renderScoutError(token, 'No microphone found on this device.');
+            } else if (e.name === 'SecurityError') {
+                _renderScoutError(token, 'A secure (HTTPS) connection is required to access the microphone.');
+            } else {
+                _renderScoutError(token, 'Could not access microphone: ' + e.name);
+            }
+            return;
         }
-        return;
     }
 
     if (!isActiveView('scout', token)) {
