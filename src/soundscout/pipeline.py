@@ -38,7 +38,7 @@ def _run_acquire_command(*, report_path: Path) -> bool:
             cid = (os.environ.get("SPOTIFY_CLIENT_ID") or "").strip()
             csec = (os.environ.get("SPOTIFY_CLIENT_SECRET") or "").strip()
             if not cid or not csec:
-                logger.info("Spotify credentials not configured; skipping spotify_id enrichment")
+                logger.debug("Spotify credentials not configured; skipping spotify_id enrichment")
                 return
 
             if not path.exists():

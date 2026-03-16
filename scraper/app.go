@@ -1073,6 +1073,26 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 				filename, enrichErr)
 		}
 
+		// Overwrite album-grouping tags with Spotify-canonical values so every
+		// track from the same album has byte-identical ALBUM / ALBUMARTIST / DATE /
+		// TRACKNUMBER / DISCNUMBER values regardless of which service downloaded it.
+		// Without this, Tidal/Qobuz may embed slightly different strings (or a full
+		// ISO date vs year-only) and Plex splits the same album into duplicate entries.
+		if req.AlbumName != "" || req.AlbumArtist != "" {
+			year := ""
+			if len(req.ReleaseDate) >= 4 {
+				year = req.ReleaseDate[:4]
+			}
+			if overrideErr := backend.OverrideGroupingTags(
+				filename,
+				req.AlbumName, req.AlbumArtist, year,
+				req.SpotifyTrackNumber, req.SpotifyDiscNumber,
+				req.SpotifyTotalTracks, req.SpotifyTotalDiscs,
+			); overrideErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: grouping tag override failed for %s: %v\n", filename, overrideErr)
+			}
+		}
+
 		// Secondary enrichment: if Phase-1 pre-fetch didn't yield MusicBrainz IDs
 		// (common for indie / niche / non-English tracks), try again using:
 		//   1. The ISRC already embedded by the download service (e.g. Tidal, Qobuz).

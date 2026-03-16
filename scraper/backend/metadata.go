@@ -1207,6 +1207,152 @@ func StripCommentTags(filePath string) error {
 	return nil
 }
 
+// OverrideGroupingTags forcibly replaces the album-grouping fields (ALBUM,
+// ALBUMARTIST, DATE, TRACKNUMBER, TOTALTRACKS, DISCNUMBER, TOTALDISCS) with
+// the provided Spotify-canonical values.  Only non-empty / non-zero values are
+// written; fields whose caller passes as empty/0 are left untouched.
+//
+// This is separate from EnrichFileTags which only *adds* missing tags — Plex
+// groups tracks into albums exclusively by these embedded tag values, so every
+// track in the same album must have byte-identical values regardless of which
+// streaming service downloaded it.
+func OverrideGroupingTags(filePath, album, albumArtist, dateYear string, trackNum, discNum, totalTracks, totalDiscs int) error {
+	ext := strings.ToLower(pathfilepath.Ext(filePath))
+	switch ext {
+	case ".flac":
+		return overrideFlacGroupingTags(filePath, album, albumArtist, dateYear, trackNum, discNum, totalTracks, totalDiscs)
+	case ".mp3":
+		return overrideMP3GroupingTags(filePath, album, albumArtist, dateYear, trackNum, discNum, totalTracks, totalDiscs)
+	default:
+		return nil
+	}
+}
+
+func overrideFlacGroupingTags(filePath, album, albumArtist, dateYear string, trackNum, discNum, totalTracks, totalDiscs int) error {
+	f, err := flac.ParseFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to parse FLAC: %w", err)
+	}
+
+	// Build the set of field names we will replace (only for non-zero values).
+	fieldsToReplace := map[string]bool{}
+	if album != "" {
+		fieldsToReplace["ALBUM"] = true
+	}
+	if albumArtist != "" {
+		fieldsToReplace["ALBUMARTIST"] = true
+	}
+	if dateYear != "" {
+		fieldsToReplace["DATE"] = true
+	}
+	if trackNum > 0 {
+		fieldsToReplace["TRACKNUMBER"] = true
+	}
+	if totalTracks > 0 {
+		fieldsToReplace["TOTALTRACKS"] = true
+	}
+	if discNum > 0 {
+		fieldsToReplace["DISCNUMBER"] = true
+	}
+	if totalDiscs > 0 {
+		fieldsToReplace["TOTALDISCS"] = true
+	}
+
+	// Find existing vorbis comment block.
+	var existingCmt *flacvorbis.MetaDataBlockVorbisComment
+	cmtIdx := -1
+	for idx, block := range f.Meta {
+		if block.Type == flac.VorbisComment {
+			cmtIdx = idx
+			existingCmt, _ = flacvorbis.ParseFromMetaDataBlock(*block)
+			break
+		}
+	}
+
+	// Copy all existing tags except the ones we're replacing.
+	cmt := flacvorbis.New()
+	if existingCmt != nil {
+		for _, comment := range existingCmt.Comments {
+			if parts := strings.SplitN(comment, "=", 2); len(parts) == 2 {
+				if fieldsToReplace[strings.ToUpper(parts[0])] {
+					continue // replaced below
+				}
+			}
+			cmt.Comments = append(cmt.Comments, comment)
+		}
+	}
+
+	// Write canonical values.
+	if album != "" {
+		_ = cmt.Add("ALBUM", album)
+	}
+	if albumArtist != "" {
+		_ = cmt.Add("ALBUMARTIST", albumArtist)
+	}
+	if dateYear != "" {
+		_ = cmt.Add("DATE", dateYear)
+	}
+	if trackNum > 0 {
+		_ = cmt.Add("TRACKNUMBER", strconv.Itoa(trackNum))
+	}
+	if totalTracks > 0 {
+		_ = cmt.Add("TOTALTRACKS", strconv.Itoa(totalTracks))
+	}
+	if discNum > 0 {
+		_ = cmt.Add("DISCNUMBER", strconv.Itoa(discNum))
+	}
+	if totalDiscs > 0 {
+		_ = cmt.Add("TOTALDISCS", strconv.Itoa(totalDiscs))
+	}
+
+	block := cmt.Marshal()
+	if cmtIdx < 0 {
+		f.Meta = append(f.Meta, &block)
+	} else {
+		f.Meta[cmtIdx] = &block
+	}
+	return f.Save(filePath)
+}
+
+func overrideMP3GroupingTags(filePath, album, albumArtist, dateYear string, trackNum, discNum, totalTracks, totalDiscs int) error {
+	tag, err := id3v2.Open(filePath, id3v2.Options{Parse: true})
+	if err != nil {
+		return fmt.Errorf("failed to open MP3: %w", err)
+	}
+	defer tag.Close()
+
+	if album != "" {
+		tag.DeleteFrames("TALB")
+		tag.AddTextFrame("TALB", id3v2.EncodingUTF8, album)
+	}
+	if albumArtist != "" {
+		tag.DeleteFrames("TPE2")
+		tag.AddTextFrame("TPE2", id3v2.EncodingUTF8, albumArtist)
+	}
+	if dateYear != "" {
+		tag.DeleteFrames("TDRC")
+		tag.AddTextFrame("TDRC", id3v2.EncodingUTF8, dateYear)
+	}
+	if trackNum > 0 {
+		tag.DeleteFrames("TRCK")
+		trackStr := strconv.Itoa(trackNum)
+		if totalTracks > 0 {
+			trackStr = fmt.Sprintf("%d/%d", trackNum, totalTracks)
+		}
+		tag.AddTextFrame("TRCK", id3v2.EncodingUTF8, trackStr)
+	}
+	if discNum > 0 {
+		tag.DeleteFrames("TPOS")
+		discStr := strconv.Itoa(discNum)
+		if totalDiscs > 0 {
+			discStr = fmt.Sprintf("%d/%d", discNum, totalDiscs)
+		}
+		tag.AddTextFrame("TPOS", id3v2.EncodingUTF8, discStr)
+	}
+
+	return tag.Save()
+}
+
 // ReadFileISRC reads the ISRC tag already embedded in a FLAC or MP3 file.
 // Returns an empty string when the tag is absent or the format is unsupported.
 func ReadFileISRC(filePath string) string {
