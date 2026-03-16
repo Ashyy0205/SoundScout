@@ -92,6 +92,7 @@ jobs:
 
       - name: Sign GHCR image
         if: github.event_name != 'pull_request'
+        continue-on-error: true
         env:
           TAGS: ${{ steps.meta-ghcr.outputs.tags }}
           DIGEST: ${{ steps.build-and-push-ghcr.outputs.digest }}
