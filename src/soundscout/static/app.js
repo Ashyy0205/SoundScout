@@ -343,7 +343,7 @@ document.addEventListener('DOMContentLoaded', () => {
         navShazamBtn.addEventListener('click', () => {
             viewStack = [];
             setActiveNav('scout');
-            openScout();
+            resumeScout();
         });
     }
 });
@@ -3290,25 +3290,55 @@ let _scoutChunks = [];
 let _scoutStopping = false;
 let _scoutToken = null;
 
+// Persists the last Scout screen across navigation so returning to Scout
+// restores whatever was showing (result card, not-found, error) instead of
+// always resetting to the idle "TAP TO IDENTIFY" state.
+// Cleared only when the user explicitly taps Scan Again / Try Again.
+let _scoutSavedState = null; // { kind: 'result'|'notfound'|'error', data?, message? }
+
 // Global entry-point called by the button's onclick attribute.
 function scoutButtonTap() {
     startScoutListen(_scoutToken);
 }
 
+// Called by Scan Again / Try Again buttons — always resets to idle.
 function openScout() {
+    _scoutSavedState = null;
+    _resumeOrOpenScout();
+}
+
+// Called by the nav button — restores the last result if one exists.
+function resumeScout() {
+    _resumeOrOpenScout();
+}
+
+function _resumeOrOpenScout() {
     if (authRequired && !authAuthed) return;
     const token = beginView('scout');
     _scoutToken = token;
 
     setLoading(false);
-    const resultsContainer = document.getElementById('resultsContainer');
-    if (resultsContainer) resultsContainer.innerHTML = '';
-
     const viewHeader = document.getElementById('viewHeader');
     if (viewHeader) {
         viewHeader.style.display = 'none';
         viewHeader.innerHTML = '';
     }
+
+    // Restore the last Scout screen if one exists.
+    if (_scoutSavedState) {
+        const rc = document.getElementById('resultsContainer');
+        if (rc) rc.innerHTML = _scoutSavedState.html;
+        currentView = { kind: 'scout', state: _scoutSavedState.kind };
+        // Re-attach live observers that need a real DOM node.
+        if (_scoutSavedState.kind === 'result') {
+            _watchScoutPlayBtn();
+            _checkScoutLibrary(token);
+        }
+        return;
+    }
+
+    const resultsContainer = document.getElementById('resultsContainer');
+    if (resultsContainer) resultsContainer.innerHTML = '';
 
     _renderScoutIdle(token);
     currentView = { kind: 'scout', state: null };
@@ -3667,6 +3697,8 @@ function _renderScoutResult(token, data) {
     `;
 
     currentView = { kind: 'scout', state: { result: data } };
+    // Persist so navigating away and returning restores the result card.
+    _scoutSavedState = { kind: 'result', html: rc.innerHTML };
 
     // Reactive icon swap: observe data-state attribute set by setPreviewButtonState
     _watchScoutPlayBtn();
@@ -3736,6 +3768,7 @@ function _renderScoutNotFound(token) {
         </div>
     `;
     currentView = { kind: 'scout', state: null };
+    _scoutSavedState = { kind: 'notfound', html: rc.innerHTML };
 }
 
 function _renderScoutError(token, message) {
@@ -3750,6 +3783,7 @@ function _renderScoutError(token, message) {
         </div>
     `;
     currentView = { kind: 'scout', state: null };
+    _scoutSavedState = { kind: 'error', html: rc.innerHTML };
 }
 
 function _renderScoutMicBlocked(token) {
