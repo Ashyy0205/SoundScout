@@ -4369,10 +4369,14 @@ def _build_home_shelves(username: str) -> list[dict]:
 
     if username:
         # --- Shelf: Personal recommendations ---
+        # Fetch a large candidate pool (150) so we can filter out already-owned tracks
+        # and still surface ~30 genuinely new songs.  Owned tracks are only shown as a
+        # last-resort pad when fewer than 15 new tracks are found.
         try:
-            rec_tracks = lastfm.get_recommended_tracks(max_tracks=40, seed_count=20, similar_per_seed=5)
+            rec_tracks = lastfm.get_recommended_tracks(max_tracks=150, seed_count=25, similar_per_seed=20)
             seen: set[tuple[str, str]] = set()
-            rec_items: list[dict] = []
+            new_rec_items: list[dict] = []
+            owned_rec_items: list[dict] = []
             for tr in rec_tracks:
                 a = (tr.artist or "").strip()
                 t = (tr.title or "").strip()
@@ -4387,24 +4391,36 @@ def _build_home_shelves(username: str) -> list[dict]:
                     in_lib = _track_in_library(a, t)
                 except Exception:
                     pass
-                rec_items.append({"name": t, "artist": a, "type": "track", "cover_url": "", "in_library": in_lib})
-            rec_items.sort(key=lambda it: bool(it.get("in_library")))
+                entry = {"name": t, "artist": a, "type": "track", "cover_url": "", "in_library": in_lib}
+                if in_lib:
+                    owned_rec_items.append(entry)
+                else:
+                    new_rec_items.append(entry)
+                if len(new_rec_items) >= 30:
+                    break  # enough new tracks — stop early
+            # Pad with owned tracks only when we couldn't find enough new ones
+            rec_items = new_rec_items[:30]
+            if len(rec_items) < 15:
+                rec_items.extend(owned_rec_items[: max(0, 30 - len(rec_items))])
             if rec_items:
                 shelves.append({"id": "recommendations", "title": "For You", "items": rec_items})
         except Exception as e:
             logger.warning("Home: recommendations shelf failed: %s", e)
 
         # --- Shelves: Because you like [Artist] ---
+        # Use more similar artists (10 of 12) and more tracks per artist (15) to build
+        # a large enough candidate pool that we can filter out owned tracks.
         try:
             top_artists = lastfm.get_top_artists_recent(limit=3)
 
             def _build_similar_shelf(source_artist: str) -> dict | None:
-                similar_artists = lastfm.get_similar_artists(source_artist, limit=8)
-                items: list[dict] = []
+                similar_artists = lastfm.get_similar_artists(source_artist, limit=12)
+                new_items: list[dict] = []
+                owned_items: list[dict] = []
                 shelf_seen: set[tuple[str, str]] = set()
-                for sim_artist in similar_artists[:6]:
+                for sim_artist in similar_artists[:10]:
                     try:
-                        tracks = lastfm.get_artist_top_tracks(sim_artist, limit=5)
+                        tracks = lastfm.get_artist_top_tracks(sim_artist, limit=15)
                         for t_artist, t_title in tracks:
                             k = (_norm_artist(t_artist), _norm_track_title(t_title))
                             if k in shelf_seen:
@@ -4415,12 +4431,20 @@ def _build_home_shelves(username: str) -> list[dict]:
                                 in_lib = _track_in_library(t_artist, t_title)
                             except Exception:
                                 pass
-                            items.append({"name": t_title, "artist": t_artist, "type": "track", "cover_url": "", "in_library": in_lib})
+                            entry = {"name": t_title, "artist": t_artist, "type": "track", "cover_url": "", "in_library": in_lib}
+                            if in_lib:
+                                owned_items.append(entry)
+                            else:
+                                new_items.append(entry)
                     except Exception:
                         pass
+                # Prefer new tracks; only pad with owned if we don't have enough
+                items = new_items[:30]
+                if len(items) < 15:
+                    items.extend(owned_items[: max(0, 30 - len(items))])
                 if not items:
                     return None
-                return {"id": f"similar_{source_artist}", "title": f"Because you like {source_artist}", "items": items[:30]}
+                return {"id": f"similar_{source_artist}", "title": f"Because you like {source_artist}", "items": items}
 
             ordered_results: list[tuple[int, dict]] = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:

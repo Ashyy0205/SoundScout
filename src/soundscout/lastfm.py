@@ -526,33 +526,89 @@ class LastFmClient:
         *,
         max_tracks: int,
         seed_count: int = 25,
-        similar_per_seed: int = 5,
+        similar_per_seed: int = 20,
     ) -> list[Track]:
-        """Generate a recommendation-style list using Last.fm similar tracks.
+        """Generate a discovery-focused recommendation list using Last.fm similar tracks.
 
-        Last.fm does not expose an official "Discover Weekly" track recommendation feed via API.
-        This approximates it by taking your recent-week plays as seeds and calling `track.getSimilar`.
+        Strategy:
+        - "Primary seeds": your recent/top listened tracks (anchors recommendations to your taste).
+        - "Escape seeds": top tracks from similar artists you haven't deeply explored.
+          These break out of the "already downloaded" cluster by pointing track.getSimilar
+          at adjacent territory rather than your existing library.
+        - Primary and escape seeds are interleaved 2:1 so discovery is spread evenly.
         """
-        seeds = self.get_last_week_tracks(max_tracks=max(1, seed_count))
-        if not seeds:
+        # ── Primary seeds from your listening history ──────────────────────────
+        primary_seeds = self.get_last_week_tracks(max_tracks=max(1, seed_count))
+        seed_keys: set[tuple[str, str]] = {(t.artist.lower(), t.title.lower()) for t in primary_seeds}
+
+        if len(primary_seeds) < seed_count // 2:
+            extra = self.get_top_tracks_recent(limit=seed_count)
+            for s in extra:
+                k = (s.artist.lower(), s.title.lower())
+                if k not in seed_keys:
+                    primary_seeds.append(s)
+                    seed_keys.add(k)
+
+        if not primary_seeds:
             return []
 
-        # Get more seeds to increase variety
-        seed_keys = {(t.artist.lower(), t.title.lower()) for t in seeds}
-        
-        # Pull extra seeds if needed to meet demand
-        if len(seeds) < seed_count:
-             logger.info("Boosting seed count from top tracks...")
-             extra_seeds = self.get_top_tracks_recent(limit=seed_count)
-             for s in extra_seeds:
-                 k = (s.artist.lower(), s.title.lower())
-                 if k not in seed_keys:
-                     seeds.append(s)
-                     seed_keys.add(k)
-        
-        # Cap seeds at requested count
-        seeds = seeds[:seed_count]
+        # ── Escape seeds: similar-artist top tracks ────────────────────────────
+        # For each of your top 3 artists, grab 3 similar artists you haven't
+        # heard much (not in your seed_keys artist set), then take their top 3
+        # tracks as seeds.  track.getSimilar on these will explore adjacent
+        # territory rather than re-surfacing your existing library.
+        escape_seeds: list[Track] = []
+        try:
+            primary_artist_names = {t.artist.lower() for t in primary_seeds}
+            top_artists = self.get_top_artists_recent(limit=5)
+            explored_escape_artists: set[str] = set(primary_artist_names)
 
+            def _escape_tracks_for_artist(source: str) -> list[Track]:
+                out: list[Track] = []
+                try:
+                    sims = self.get_similar_artists(source, limit=8)
+                    for sim in sims:
+                        if sim.lower() in explored_escape_artists:
+                            continue
+                        explored_escape_artists.add(sim.lower())
+                        try:
+                            for t_artist, t_title in self.get_artist_top_tracks(sim, limit=4):
+                                k = (t_artist.lower(), t_title.lower())
+                                if k not in seed_keys:
+                                    out.append(Track(artist=t_artist, title=t_title))
+                        except Exception:
+                            pass
+                        if len(out) >= 4:
+                            break
+                except Exception:
+                    pass
+                return out
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+                futs = [ex.submit(_escape_tracks_for_artist, a) for a in top_artists[:3]]
+                for fut in concurrent.futures.as_completed(futs):
+                    try:
+                        for t in fut.result():
+                            k = (t.artist.lower(), t.title.lower())
+                            if k not in seed_keys:
+                                escape_seeds.append(t)
+                                seed_keys.add(k)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            logger.debug("Escape-seed gathering failed: %s", exc)
+
+        # ── Interleave primary and escape seeds (2:1 ratio) ───────────────────
+        seeds: list[Track] = []
+        pi, ei = 0, 0
+        while pi < len(primary_seeds) or ei < len(escape_seeds):
+            for _ in range(2):
+                if pi < len(primary_seeds):
+                    seeds.append(primary_seeds[pi]); pi += 1
+            if ei < len(escape_seeds):
+                seeds.append(escape_seeds[ei]); ei += 1
+
+        # ── Fetch similar tracks for every seed ───────────────────────────────
         recommendations: list[Track] = []
         seen: set[tuple[str, str]] = set(seed_keys)
 

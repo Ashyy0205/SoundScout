@@ -26,8 +26,11 @@ class Settings(BaseSettings):
     # - weekly_plays: last week's listening chart (what you played)
     # - recommendations: generate recommendations using track.getSimilar seeded by your last week plays
     lastfm_mode: str = "recommendations"
-    lastfm_seed_count: int = 25
-    lastfm_similar_per_seed: int = 5
+    # More seeds = more genre/era diversity in the candidate pool.
+    lastfm_seed_count: int = 40
+    # Tracks fetched per seed from track.getSimilar. Higher = larger candidate pool
+    # before library filtering, which is essential for large libraries.
+    lastfm_similar_per_seed: int = 30
 
     # Plex
     plex_baseurl: AnyHttpUrl

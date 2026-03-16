@@ -173,17 +173,16 @@ def run_job(
         target_fetch_missing = needed
         
         if mode in {"recommendations", "recommended", "similar", "discover"}:
-            # Build an internal candidate pool, then select up to `max_tracks` missing.
-            # We keep this reasonably sized so logs/output don't look like we're "getting 700+" tracks.
-            # If someone has a huge library and can't find enough missing tracks, they can increase
-            # LASTFM_SEED_COUNT / LASTFM_SIMILAR_PER_SEED.
-            pool_target = max(200, min(target_fetch_missing * 8, 1200))
-            seed_count = max(5, int(lastfm_seed_count))
-            # Ensure we get enough candidates per seed
+            # Build a large candidate pool before library filtering.
+            # A well-populated library can own 80-95% of naive candidates, so we need
+            # a pool 30-50× the target to reliably deliver 60 genuinely new tracks.
+            pool_target = max(800, min(target_fetch_missing * 40, 6000))
+            seed_count = max(10, int(lastfm_seed_count))
+            # Use the configured per_seed as a floor; compute enough to fill the pool.
             per_seed = max(int(lastfm_similar_per_seed), int(math.ceil(pool_target / seed_count)))
-            # Boost per_seed slightly to account for duplicates/overlap
-            per_seed = max(per_seed, 10)
-            # Last.fm typically caps track.getSimilar results; keep this sane.
+            # Ensure a minimum of 30 per seed for diversity.
+            per_seed = max(per_seed, 30)
+            # Last.fm caps track.getSimilar at 100.
             per_seed = min(per_seed, 100)
 
             tracks = lastfm.get_recommended_tracks(
