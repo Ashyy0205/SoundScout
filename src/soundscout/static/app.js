@@ -3404,7 +3404,7 @@ async function startScoutListen(token) {
     // Choose a supported MIME type
     const mimeType = (['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg', ''])
         .find(m => !m || MediaRecorder.isTypeSupported(m)) || '';
-    const recOpts = mimeType ? { mimeType } : {};
+    const recOpts = mimeType ? { mimeType, audioBitsPerSecond: 128000 } : {};
 
     try {
         _scoutMediaRecorder = new MediaRecorder(stream, recOpts);
@@ -3418,31 +3418,90 @@ async function startScoutListen(token) {
         if (e.data && e.data.size > 0) _scoutChunks.push(e.data);
     });
 
-    _scoutMediaRecorder.addEventListener('stop', async () => {
+    // 'stop' fires after the final 'dataavailable' — just release the mic.
+    // All submission logic is driven by the adaptive checkpoints below.
+    _scoutMediaRecorder.addEventListener('stop', () => {
         stream.getTracks().forEach(t => t.stop());
-        if (!isActiveView('scout', token)) return;
-        await _submitScoutAudio(token, _scoutChunks, mimeType || 'audio/webm');
     });
 
     _scoutMediaRecorder.start(250); // collect 250 ms chunks
 
-    // Allow user to stop early by tapping the button again
-    if (btnEl) {
-        btnEl.onclick = () => {
-            if (_scoutMediaRecorder && _scoutMediaRecorder.state === 'recording') {
-                _scoutStopping = true;
-                _scoutMediaRecorder.stop();
-            }
-        };
-    }
+    // ── Adaptive listening engine ───────────────────────────────────────────
+    //
+    // Recognition is attempted at progressive checkpoints using all audio
+    // captured up to that moment.  A match found early surfaces immediately;
+    // if recognition keeps failing we keep listening up to the 20 s cap.
+    //
+    // Checkpoints (ms from recording start): 4 000 → 8 000 → 13 000 → 20 000
+    //
+    const _checkpoints = [4000, 8000, 13000, 20000];
+    let _scoutDone = false;        // true once we have a result or have hit the cap
+    const _checkpointTimers = [];
 
-    // Auto-stop after 12 seconds — more audio improves recognition accuracy
-    setTimeout(() => {
+    function _haltRecording() {
+        _checkpointTimers.forEach(clearTimeout);
+        _checkpointTimers.length = 0;
         if (_scoutMediaRecorder && _scoutMediaRecorder.state === 'recording' && !_scoutStopping) {
             _scoutStopping = true;
             _scoutMediaRecorder.stop();
         }
-    }, 12000);
+    }
+
+    // Manual early stop: treat as an immediate final submission.
+    if (btnEl) {
+        btnEl.onclick = () => {
+            if (_scoutDone) return;
+            _scoutDone = true;
+            _haltRecording();
+            _submitScoutAudio(token, [..._scoutChunks], mimeType || 'audio/webm');
+        };
+    }
+
+    _checkpoints.forEach((ms, idx) => {
+        const isLast = idx === _checkpoints.length - 1;
+        const t = setTimeout(async () => {
+            if (_scoutDone || !isActiveView('scout', token)) return;
+            const snapshot = [..._scoutChunks]; // capture all audio up to this moment
+
+            if (isLast) {
+                // Final checkpoint — stop recording and do the definitive submission.
+                _scoutDone = true;
+                _haltRecording();
+                await _submitScoutAudio(token, snapshot, mimeType || 'audio/webm');
+            } else {
+                // Intermediate checkpoint — keep recording while the request is in-flight.
+                const found = await _trySilentScoutAttempt(token, snapshot, mimeType || 'audio/webm');
+                if (found) {
+                    _scoutDone = true;
+                    _haltRecording();
+                } else if (!_scoutDone && isActiveView('scout', token) && labelEl) {
+                    labelEl.textContent = 'STILL SEARCHING…';
+                }
+            }
+        }, ms);
+        _checkpointTimers.push(t);
+    });
+}
+
+// Silently attempt recognition without changing the listening UI.
+// Returns true if the track was identified (and the result card rendered);
+// false on any miss, error, or when the view is no longer active.
+async function _trySilentScoutAttempt(token, chunks, mimeType) {
+    if (!chunks || chunks.length === 0 || !isActiveView('scout', token)) return false;
+    const blob = new Blob(chunks, { type: mimeType });
+    const formData = new FormData();
+    formData.append('audio', blob, 'recording.webm');
+    try {
+        const resp = await fetch('/api/shazam', { method: 'POST', body: formData });
+        if (!isActiveView('scout', token)) return false;
+        const data = await resp.json();
+        if (!isActiveView('scout', token)) return false;
+        if (resp.ok && !data.error && data.found) {
+            _renderScoutResult(token, data);
+            return true;
+        }
+    } catch (_) { /* network hiccup — treat as miss */ }
+    return false;
 }
 
 async function _submitScoutAudio(token, chunks, mimeType) {

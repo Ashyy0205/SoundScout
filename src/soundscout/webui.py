@@ -5334,7 +5334,9 @@ def _convert_audio_to_wav(audio_bytes: bytes) -> bytes:
                 # Loudness normalization — brings quiet/distant audio up to a
                 # consistent level before fingerprinting, which significantly
                 # improves recognition of low/normal volume sources.
-                '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+                # highpass=f=80 removes sub-80 Hz mic rumble and handling noise
+                # (common on mobile) before Shazam fingerprinting.
+                '-af', 'highpass=f=80,loudnorm=I=-14:TP=-1.5:LRA=11',
                 '-f', 'wav', output_path,
             ],
             capture_output=True,
