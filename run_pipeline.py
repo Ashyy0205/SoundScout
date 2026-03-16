@@ -40,6 +40,11 @@ if not _is_truthy(os.environ.get("WEBUI_ACCESS_LOG", "0")):
     logging.getLogger("werkzeug.serving").setLevel(logging.WARNING)
     logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 
+# APScheduler logs "Running job..." and "Job...executed successfully" at INFO every
+# 30 seconds. Demote to WARNING so only genuine errors surface.
+logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
+logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
+
 
 def _webui_data_dir() -> Path:
     """Directory for WebUI state.
@@ -272,7 +277,7 @@ def _run_pipeline_wrapper(*, force: bool = False) -> None:
                 if _last_no_due_log_slot != slot:
                     _last_no_due_log_slot = slot
                     counts = _count_store(store, now=now) if isinstance(store, dict) else {}
-                    logger.info(
+                    logger.debug(
                         "No auto-discovery runs due now (tz=%s now=%s). users=%s opted_in=%s lastfm=%s plex=%s due=%s",
                         _tz_name_for_log(),
                         now.strftime("%a %Y-%m-%d %H:%M"),

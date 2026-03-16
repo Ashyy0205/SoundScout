@@ -272,7 +272,7 @@ def run_full_pipeline(
     # Optional post-download import/tagging step (for users who route downloads into an inbox)
     run_optional_import(s.enable_import, s.import_inbox_dir, s.import_cmd)
 
-    logger.info("[Step 3/3] Scanning Plex + building playlist (%d most recently added tracks)", ok_count)
+    logger.info("[Step 3/3] Scanning Plex + building playlist")
     run_job(
         lastfm_api_key=s.lastfm_api_key,
         lastfm_username=effective_lastfm_username,
@@ -290,7 +290,6 @@ def run_full_pipeline(
         enable_import=False,
         import_inbox_dir=s.import_inbox_dir,
         import_cmd=s.import_cmd,
-        recently_added_count=ok_count,
     )
 
     logger.info("--- Pipeline finished successfully ---")

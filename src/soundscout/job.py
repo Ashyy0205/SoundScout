@@ -112,7 +112,6 @@ def run_job(
     enable_import: bool,
     import_inbox_dir: str,
     import_cmd: str | None,
-    recently_added_count: int = 0,
 ) -> None:
     # Special mode: create playlist from CSV report (post-download)
     # If lastfm_mode is 'playlist_from_report' and report_path exists, we skip Last.fm and just scan -> match -> playlist.
@@ -124,7 +123,6 @@ def run_job(
             plex_music_library=plex_music_library,
             playlist_name=playlist_name,
             dry_run=dry_run,
-            recently_added_count=recently_added_count,
         )
         return
 
@@ -380,7 +378,6 @@ def _run_playlist_from_report_mode(
     plex_music_library: str,
     playlist_name: str,
     dry_run: bool,
-    recently_added_count: int = 0,
 ) -> None:
     """Read keys from the CSV report, wait for Plex to scan, and build the playlist."""
     import csv
@@ -470,40 +467,41 @@ def _run_playlist_from_report_mode(
     # Trigger a scan to pick up the newly downloaded files
     logger.info("Triggering Plex library scan...")
     did_trigger_scan = plex.update_library()
-    
-    # Simple wait strategy: wait for the scan to likely finish/files to appear.
-    # Increased to 90s to ensure metadata matching (translation) is complete
-    scan_wait_seconds = 90
+
+    # Wait for Plex to index the newly downloaded files.
+    # - If the scan was triggered successfully, wait 90 s (Plex needs time to hash + match).
+    # - If the scan failed (e.g. 403 on a shared account), wait 30 s anyway — Plex's own
+    #   file-system watcher or periodic auto-scan may still pick up the new files.
     if did_trigger_scan:
+        scan_wait_seconds = 90
         logger.info("Waiting %d seconds for Plex to digest new files...", scan_wait_seconds)
         time.sleep(scan_wait_seconds)
     else:
+        scan_wait_seconds = 30
         logger.info(
-            "Skipping scan wait because Plex refresh could not be triggered (common for shared users)."
+            "Plex scan could not be triggered (common for shared users); "
+            "waiting %d seconds for Plex auto-scan to pick up new files...",
+            scan_wait_seconds,
         )
+        time.sleep(scan_wait_seconds)
 
-    if recently_added_count > 0:
-        # Simpler and more reliable: take the N most recently added tracks from Plex,
-        # where N = number of successful downloads reported by the scraper.
-        logger.info("Fetching %d most recently added tracks from Plex...", recently_added_count)
-        playlist_items = plex.get_recently_added(recently_added_count)
-        logger.info("Got %d recently added tracks from Plex.", len(playlist_items))
-    else:
-        # Fallback: try to match each track from the report by title/artist
-        logger.info("Looking up tracks in Plex by title/artist...")
-        playlist_items = []
-        missing_after_scan = []
-        for t in wanted_tracks:
-            item = plex.find_track(t)
-            if item:
-                playlist_items.append(item)
-            else:
-                missing_after_scan.append(t)
-        logger.info("Found %d/%d tracks in Plex.", len(playlist_items), len(wanted_tracks))
-        if missing_after_scan:
-            logger.info(
-                "Tracks not matched in Plex (download failed or metadata mismatch): %s",
-                "; ".join([f"{m.artist}-{m.title}" for m in missing_after_scan]),
-            )
+    # Match every track from the report CSV against Plex by title/artist.
+    # This is the correct approach: the playlist should contain the tracks the user
+    # asked for, not just whichever N tracks happen to be most-recently-added globally.
+    logger.info("Looking up %d report tracks in Plex by title/artist...", len(wanted_tracks))
+    playlist_items = []
+    missing_after_scan = []
+    for t in wanted_tracks:
+        item = plex.find_track(t)
+        if item:
+            playlist_items.append(item)
+        else:
+            missing_after_scan.append(t)
+    logger.info("Found %d/%d tracks in Plex.", len(playlist_items), len(wanted_tracks))
+    if missing_after_scan:
+        logger.debug(
+            "Tracks not yet in Plex (not scanned or download failed): %s",
+            "; ".join([f"{m.artist} - {m.title}" for m in missing_after_scan[:10]]),
+        )
 
     plex.upsert_playlist(playlist_name, playlist_items)
