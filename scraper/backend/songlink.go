@@ -61,6 +61,7 @@ func (s *SongLinkClient) GetAllURLsFromSpotify(spotifyTrackID string) (*SongLink
 		}
 	}
 
+	now = time.Now() // refresh after any sleep above
 	if !s.lastAPICallTime.IsZero() {
 		timeSinceLastCall := now.Sub(s.lastAPICallTime)
 		minDelay := 6 * time.Second
@@ -98,9 +99,11 @@ func (s *SongLinkClient) GetAllURLsFromSpotify(spotifyTrackID string) (*SongLink
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			if i < maxRetries-1 {
-				waitTime := 15 * time.Second
-				fmt.Fprintf(os.Stderr, "Rate limited by API, waiting %v before retry...\n", waitTime)
+				waitTime := time.Duration(65<<uint(i)) * time.Second // 65s, 130s
+				fmt.Fprintf(os.Stderr, "Rate limited by song.link, waiting %v before retry...\n", waitTime)
 				time.Sleep(waitTime)
+				s.apiCallCount = 0
+				s.apiCallResetTime = time.Now()
 				continue
 			}
 			return nil, fmt.Errorf("API rate limit exceeded after %d retries", maxRetries)
@@ -180,6 +183,7 @@ func (s *SongLinkClient) CheckTrackAvailability(spotifyTrackID string, isrc stri
 		}
 	}
 
+	now = time.Now() // refresh after any sleep above
 	if !s.lastAPICallTime.IsZero() {
 		timeSinceLastCall := now.Sub(s.lastAPICallTime)
 		minDelay := 6 * time.Second
@@ -217,9 +221,11 @@ func (s *SongLinkClient) CheckTrackAvailability(spotifyTrackID string, isrc stri
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			if i < maxRetries-1 {
-				waitTime := 15 * time.Second
-				fmt.Fprintf(os.Stderr, "Rate limited by API, waiting %v before retry...\n", waitTime)
+				waitTime := time.Duration(65<<uint(i)) * time.Second // 65s, 130s
+				fmt.Fprintf(os.Stderr, "Rate limited by song.link, waiting %v before retry...\n", waitTime)
 				time.Sleep(waitTime)
+				s.apiCallCount = 0
+				s.apiCallResetTime = time.Now()
 				continue
 			}
 			return nil, fmt.Errorf("API rate limit exceeded after %d retries", maxRetries)
@@ -332,6 +338,7 @@ func (s *SongLinkClient) GetDeezerURLFromSpotify(spotifyTrackID string) (string,
 		}
 	}
 
+	now = time.Now() // refresh after any sleep above
 	if !s.lastAPICallTime.IsZero() {
 		timeSinceLastCall := now.Sub(s.lastAPICallTime)
 		minDelay := 6 * time.Second
@@ -369,9 +376,11 @@ func (s *SongLinkClient) GetDeezerURLFromSpotify(spotifyTrackID string) (string,
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			if i < maxRetries-1 {
-				waitTime := 15 * time.Second
-				fmt.Fprintf(os.Stderr, "Rate limited by API, waiting %v before retry...\n", waitTime)
+				waitTime := time.Duration(65<<uint(i)) * time.Second // 65s, 130s
+				fmt.Fprintf(os.Stderr, "Rate limited by song.link, waiting %v before retry...\n", waitTime)
 				time.Sleep(waitTime)
+				s.apiCallCount = 0
+				s.apiCallResetTime = time.Now()
 				continue
 			}
 			return "", fmt.Errorf("API rate limit exceeded after %d retries", maxRetries)
@@ -481,6 +490,7 @@ func (s *SongLinkClient) GetAllPlatformURLs(spotifyTrackID string) (*AllPlatform
 			s.apiCallResetTime = time.Now()
 		}
 	}
+	now = time.Now() // refresh after any sleep above
 	if !s.lastAPICallTime.IsZero() {
 		timeSinceLastCall := now.Sub(s.lastAPICallTime)
 		minDelay := 6 * time.Second
@@ -518,9 +528,11 @@ func (s *SongLinkClient) GetAllPlatformURLs(spotifyTrackID string) (*AllPlatform
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			if i < maxRetries-1 {
-				waitTime := 15 * time.Second
+				waitTime := time.Duration(65<<uint(i)) * time.Second // 65s, 130s
 				fmt.Fprintf(os.Stderr, "Rate limited by song.link, waiting %v before retry...\n", waitTime)
 				time.Sleep(waitTime)
+				s.apiCallCount = 0
+				s.apiCallResetTime = time.Now()
 				continue
 			}
 			return nil, fmt.Errorf("song.link rate limit exceeded after %d retries", maxRetries)

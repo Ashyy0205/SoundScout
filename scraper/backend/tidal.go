@@ -189,15 +189,32 @@ func (t *TidalDownloader) GetTidalURLFromSpotify(spotifyTrackID string) (string,
 
 	fmt.Fprintln(os.Stderr, "Getting Tidal URL...")
 
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to get Tidal URL: %w", err)
+	maxRetries := 3
+	var resp *http.Response
+	for i := 0; i < maxRetries; i++ {
+		resp, err = t.client.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("failed to get Tidal URL: %w", err)
+		}
+
+		if resp.StatusCode == 429 {
+			resp.Body.Close()
+			if i < maxRetries-1 {
+				waitTime := time.Duration(65<<uint(i)) * time.Second // 65s, 130s
+				fmt.Fprintf(os.Stderr, "Rate limited by song.link, waiting %v before retry...\n", waitTime)
+				time.Sleep(waitTime)
+				continue
+			}
+			return "", fmt.Errorf("API rate limit exceeded after %d retries", maxRetries)
+		}
+
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			return "", fmt.Errorf("API returned status %d", resp.StatusCode)
+		}
+		break
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
 
 	var songLinkResp struct {
 		LinksByPlatform map[string]struct {

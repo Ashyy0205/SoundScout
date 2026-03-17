@@ -4,6 +4,7 @@ import logging
 import os
 import re as _re
 import subprocess
+import threading
 from pathlib import Path
 import csv
 
@@ -152,10 +153,20 @@ def _run_acquire_command(*, report_path: Path) -> bool:
         acquire_cmd,
         shell=True,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
         env=env,
     )
+
+    def _log_stderr() -> None:
+        for line in (proc.stderr or []):
+            line = line.rstrip()
+            if line:
+                logger.debug("[scraper] %s", line)
+
+    stderr_thread = threading.Thread(target=_log_stderr, daemon=True)
+    stderr_thread.start()
+
     ok_count = 0
     fail_count = 0
     for raw in (proc.stdout or []):
@@ -177,6 +188,7 @@ def _run_acquire_command(*, report_path: Path) -> bool:
         elif m_dl:
             logger.debug("  [%s/%s] Downloading: %s \u2013 %s", m_dl.group(1), m_dl.group(2), m_dl.group(3), m_dl.group(4))
     proc.wait()
+    stderr_thread.join()
     if ok_count + fail_count > 0:
         logger.info("Acquisition complete: %d downloaded, %d failed", ok_count, fail_count)
     if proc.returncode != 0:
