@@ -73,6 +73,15 @@ func NewAmazonDownloader() *AmazonDownloader {
 	}
 }
 
+// amazonMusicTerritory returns the Amazon Music territory for URL construction.
+// Override with AMAZON_MUSIC_TERRITORY env var (e.g. GB, DE, AU). Defaults to US.
+func amazonMusicTerritory() string {
+	if t := strings.TrimSpace(os.Getenv("AMAZON_MUSIC_TERRITORY")); t != "" {
+		return strings.ToUpper(t)
+	}
+	return "US"
+}
+
 func (a *AmazonDownloader) getRandomUserAgent() string {
 	return fmt.Sprintf("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_%d_%d) AppleWebKit/%d.%d (KHTML, like Gecko) Chrome/%d.0.%d.%d Safari/%d.%d",
 		rand.Intn(4)+11, rand.Intn(5)+4,
@@ -138,7 +147,7 @@ func (a *AmazonDownloader) GetAmazonURLFromSpotify(spotifyTrackID string) (strin
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			if i < maxRetries-1 {
-				waitTime := 15 * time.Second
+				waitTime := time.Duration(10<<uint(i)) * time.Second // 10s, 20s
 				fmt.Fprintf(os.Stderr, "Rate limited by API, waiting %v before retry...\n", waitTime)
 				time.Sleep(waitTime)
 				continue
@@ -186,7 +195,7 @@ func (a *AmazonDownloader) GetAmazonURLFromSpotify(spotifyTrackID string) (strin
 		if len(parts) > 1 {
 			trackAsin := strings.Split(parts[1], "&")[0]
 			musicBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9tdXNpYy5hbWF6b24uY29tL3RyYWNrcy8=")
-			amazonURL = fmt.Sprintf("%s%s?musicTerritory=US", string(musicBase), trackAsin)
+			amazonURL = fmt.Sprintf("%s%s?musicTerritory=%s", string(musicBase), trackAsin, amazonMusicTerritory())
 		}
 	}
 

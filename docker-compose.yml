@@ -68,6 +68,9 @@ services:
       # Tidal market / territory for API lookups (ISO 3166-1 alpha-2 country code)
       # Set to match the country your Tidal account is registered in, e.g. GB, AU, DE
       TIDAL_COUNTRY_CODE: ${TIDAL_COUNTRY_CODE:-US}
+      # Amazon Music territory for URL construction (ISO 3166-1 alpha-2 country code)
+      # Set to match your Amazon Music region, e.g. GB, DE, AU
+      AMAZON_MUSIC_TERRITORY: ${AMAZON_MUSIC_TERRITORY:-US}
 
       # --- Optional Import Step ---
       ENABLE_IMPORT: ${ENABLE_IMPORT:-0}
