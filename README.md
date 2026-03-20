@@ -39,11 +39,11 @@
 <table align="center">
   <tr>
     <td align="center" width="33%">
-      <img src="docs/screenshots/home-mobile.png" width="220" alt="Home — personalised recommendations"/>
+      <img src="docs/screenshots/home-mobile.jpg" width="220" alt="Home — personalised recommendations"/>
       <br/><sub><b>Home — For You & artist-seeded rows</b></sub>
     </td>
     <td align="center" width="33%">
-      <img src="docs/screenshots/scout-mobile.png" width="220" alt="Scout — audio fingerprint identification"/>
+      <img src="docs/screenshots/scout-mobile.jpg" width="220" alt="Scout — audio fingerprint identification"/>
       <br/><sub><b>Scout — identify any song by listening</b></sub>
     </td>
     <td align="center" width="33%">
@@ -73,8 +73,6 @@
   </tr>
 </table>
 
-> **Note:** Save your screenshots to `docs/screenshots/` — filenames used above:
-> `home-mobile.png`, `scout-mobile.png`, `library-desktop.png`, `home-desktop.png`, `import-desktop.png`, `search-desktop.png`
 
 ---
 
