@@ -174,6 +174,52 @@ func (t *TidalDownloader) GetAccessToken() (string, error) {
 	return result.AccessToken, nil
 }
 
+// GetTrackURLFromISRC looks up a Tidal track directly via the Tidal API using an ISRC.
+// This requires no song.link call, making it resilient to song.link rate limiting.
+func (t *TidalDownloader) GetTrackURLFromISRC(isrc string) (string, error) {
+	token, err := t.GetAccessToken()
+	if err != nil {
+		return "", fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	// Reuse the existing /v1/tracks/ base64 and strip the trailing slash to get the
+	// query-parameter form: https://api.tidal.com/v1/tracks?isrc=...&countryCode=US
+	trackBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9hcGkudGlkYWwuY29tL3YxL3RyYWNrcy8=")
+	searchURL := fmt.Sprintf("%s?isrc=%s&countryCode=US", strings.TrimSuffix(string(trackBase), "/"), isrc)
+
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create ISRC lookup request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Tidal ISRC lookup failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("Tidal ISRC lookup returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Items []TidalTrack `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode Tidal ISRC response: %w", err)
+	}
+
+	if len(result.Items) == 0 {
+		return "", fmt.Errorf("track not found on Tidal for ISRC %s", isrc)
+	}
+
+	tidalURL := fmt.Sprintf("https://tidal.com/track/%d", result.Items[0].ID)
+	fmt.Fprintf(os.Stderr, "✓ Found Tidal track via ISRC %s: %s\n", isrc, tidalURL)
+	return tidalURL, nil
+}
+
 func (t *TidalDownloader) GetTidalURLFromSpotify(spotifyTrackID string) (string, error) {
 
 	spotifyBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9vcGVuLnNwb3RpZnkuY29tL3RyYWNrLw==")

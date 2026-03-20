@@ -89,6 +89,15 @@ func pickColumnValue(record []string, idx int) string {
 	return strings.TrimSpace(record[idx])
 }
 
+func containsStr(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // resolvedTrack holds a track entry together with its pre-fetched platform URLs and
 // full Spotify track metadata. All fields are populated during Phase 1 so that
 // DownloadTrack never needs to make an additional Spotify API call in Phase 2.
@@ -396,10 +405,15 @@ func (a *App) DownloadSongsFromCSV(csvPath string, outputDir string) ([]Download
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  [meta] prefetch failed for %s: %v\n", rt.spotifyID, err)
 				// Spotify failed — still try MusicBrainz by artist+title as fallback.
+				// IMPORTANT: capture ISRC from MusicBrainz so Tidal/Qobuz can reach the
+				// track without a song.link call even when Spotify metadata is unavailable.
 				if mb, mbErr := backend.EnrichFromMusicBrainz(rt.artist, rt.title, ""); mbErr == nil && mb != nil {
 					rt.mbTrackID = mb.TrackID
 					rt.mbAlbumID = mb.AlbumID
 					rt.mbArtistID = mb.ArtistID
+					if rt.isrc == "" && mb.ISRC != "" {
+						rt.isrc = mb.ISRC
+					}
 				}
 				return
 			}
@@ -548,6 +562,20 @@ func (a *App) DownloadSongsFromCSV(csvPath string, outputDir string) ([]Download
 						continue
 					}
 					candidate = append(candidate, s)
+				}
+			} else {
+				// song.link found SOME services but may have missed Tidal or Qobuz
+				// (e.g. track not in Deezer/Tidal databases on song.link even though
+				// it IS available). If we have an ISRC we can reach both services
+				// directly without song.link — always add them so they are tried.
+				hasISRC := rt.isrc != "" && isValidISRC(rt.isrc)
+				if hasISRC {
+					if !containsStr(candidate, "tidal") {
+						candidate = append([]string{"tidal"}, candidate...) // Tidal first
+					}
+					if !containsStr(candidate, "qobuz") {
+						candidate = append(candidate, "qobuz")
+					}
 				}
 			}
 
@@ -965,13 +993,34 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 		if req.ServiceURL != "" {
 			filename, err = downloader.DownloadByURL(req.ServiceURL, req.OutputDir, req.AudioFormat, req.FilenameFormat, req.TrackNumber, req.Position, req.TrackName, req.ArtistName, req.AlbumName, req.AlbumArtist, req.ReleaseDate, req.UseAlbumTrackNumber, req.CoverURL, req.EmbedMaxQualityCover, req.SpotifyTrackNumber, req.SpotifyDiscNumber, req.SpotifyTotalTracks, req.SpotifyTotalDiscs, req.Copyright, req.Publisher, spotifyURL)
 		} else {
-			if req.SpotifyID == "" {
+			if req.SpotifyID == "" && req.ISRC == "" {
 				return DownloadResponse{
 					Success: false,
-					Error:   "Spotify ID is required for Tidal",
-				}, fmt.Errorf("spotify ID is required for Tidal")
+					Error:   "Spotify ID or ISRC is required for Tidal",
+				}, fmt.Errorf("spotify ID or ISRC is required for Tidal")
 			}
-			filename, err = downloader.Download(req.SpotifyID, req.OutputDir, req.AudioFormat, req.FilenameFormat, req.TrackNumber, req.Position, req.TrackName, req.ArtistName, req.AlbumName, req.AlbumArtist, req.ReleaseDate, req.UseAlbumTrackNumber, req.CoverURL, req.EmbedMaxQualityCover, req.SpotifyTrackNumber, req.SpotifyDiscNumber, req.SpotifyTotalTracks, req.SpotifyTotalDiscs, req.Copyright, req.Publisher, spotifyURL)
+			// Try ISRC-based Tidal lookup first — hits the Tidal API directly so it works
+			// even when song.link is rate-limiting us. The ISRC comes from the Spotify
+			// metadata pre-fetch in Phase 1 at zero extra wall-clock cost.
+			tidalURL := ""
+			if req.ISRC != "" && isValidISRC(req.ISRC) {
+				if url, isrcErr := downloader.GetTrackURLFromISRC(req.ISRC); isrcErr == nil {
+					tidalURL = url
+				} else {
+					fmt.Fprintf(os.Stderr, "  ISRC Tidal lookup failed (%v), falling back to song.link\n", isrcErr)
+				}
+			}
+			if tidalURL != "" {
+				filename, err = downloader.DownloadByURLWithFallback(tidalURL, req.OutputDir, req.AudioFormat, req.FilenameFormat, req.TrackNumber, req.Position, req.TrackName, req.ArtistName, req.AlbumName, req.AlbumArtist, req.ReleaseDate, req.UseAlbumTrackNumber, req.CoverURL, req.EmbedMaxQualityCover, req.SpotifyTrackNumber, req.SpotifyDiscNumber, req.SpotifyTotalTracks, req.SpotifyTotalDiscs, req.Copyright, req.Publisher, spotifyURL)
+			} else {
+				if req.SpotifyID == "" {
+					return DownloadResponse{
+						Success: false,
+						Error:   "Tidal: ISRC lookup failed and no Spotify ID available",
+					}, fmt.Errorf("tidal: ISRC lookup failed and no Spotify ID available")
+				}
+				filename, err = downloader.Download(req.SpotifyID, req.OutputDir, req.AudioFormat, req.FilenameFormat, req.TrackNumber, req.Position, req.TrackName, req.ArtistName, req.AlbumName, req.AlbumArtist, req.ReleaseDate, req.UseAlbumTrackNumber, req.CoverURL, req.EmbedMaxQualityCover, req.SpotifyTrackNumber, req.SpotifyDiscNumber, req.SpotifyTotalTracks, req.SpotifyTotalDiscs, req.Copyright, req.Publisher, spotifyURL)
+			}
 		}
 
 	case "qobuz":
