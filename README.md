@@ -35,43 +35,33 @@
 
 ## Screenshots
 
-<!-- Mobile screenshots -->
-<table align="center">
-  <tr>
-    <td align="center" width="33%">
-      <img src="docs/screenshots/home-mobile.jpg" width="220" alt="Home — personalised recommendations"/>
-      <br/><sub><b>Home — For You & artist-seeded rows</b></sub>
-    </td>
-    <td align="center" width="33%">
-      <img src="docs/screenshots/scout-mobile.jpg" width="220" alt="Scout — audio fingerprint identification"/>
-      <br/><sub><b>Scout — identify any song by listening</b></sub>
-    </td>
-    <td align="center" width="33%">
-      <img src="docs/screenshots/library-desktop.png" width="220" alt="Library — full album grid"/>
-      <br/><sub><b>Library — browse your entire collection</b></sub>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="docs/screenshots/home-mobile.jpg" width="230" alt="Home" />&nbsp;&nbsp;&nbsp;
+  <img src="docs/screenshots/scout-mobile.jpg" width="230" alt="Scout" />
+</p>
+<p align="center">
+  <sub><b>Home — For You &amp; artist-seeded rows&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Scout — identify any song by listening</b></sub>
+</p>
 
-<!-- Desktop screenshots -->
-<table align="center">
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/home-desktop.png" width="480" alt="Desktop home with recommendations"/>
-      <br/><sub><b>Home — desktop recommendations feed</b></sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/import-desktop.png" width="480" alt="Import from Spotify"/>
-      <br/><sub><b>Import — paste any Spotify URL to download</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/search-desktop.png" width="480" alt="Search results for an artist"/>
-      <br/><sub><b>Search — find and download any artist's discography</b></sub>
-    </td>
-  </tr>
-</table>
+<br/>
+
+<p align="center">
+  <img src="docs/screenshots/home-desktop.png" width="48%" alt="Home desktop" />&nbsp;
+  <img src="docs/screenshots/import-desktop.png" width="48%" alt="Import from Spotify" />
+</p>
+<p align="center">
+  <sub><b>Home — personalised recommendations feed&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Import — paste any Spotify URL to download</b></sub>
+</p>
+
+<br/>
+
+<p align="center">
+  <img src="docs/screenshots/library-desktop.png" width="48%" alt="Library" />&nbsp;
+  <img src="docs/screenshots/search-desktop.png" width="48%" alt="Search" />
+</p>
+<p align="center">
+  <sub><b>Library — browse your entire collection&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Search — find &amp; download any artist's discography</b></sub>
+</p>
 
 
 ---
