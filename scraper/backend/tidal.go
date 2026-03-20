@@ -16,14 +16,15 @@ import (
 	"time"
 )
 
-// tidalCountryCode returns the Tidal market to use for API calls.
-// Override with the TIDAL_COUNTRY_CODE environment variable (e.g. GB, AU, DE).
-// Defaults to US.
-func tidalCountryCode() string {
+// tidalCountryCodes returns the ordered list of Tidal market codes to try for API calls.
+// If TIDAL_COUNTRY_CODE is set, only that code is used.
+// Otherwise, a wide set of major markets is tried in order so tracks exclusive to
+// any single territory are still found without needing any configuration.
+func tidalCountryCodes() []string {
 	if cc := strings.TrimSpace(os.Getenv("TIDAL_COUNTRY_CODE")); cc != "" {
-		return strings.ToUpper(cc)
+		return []string{strings.ToUpper(cc)}
 	}
-	return "US"
+	return []string{"US", "GB", "DE", "AU", "CA", "FR", "JP", "NL", "SE", "NO"}
 }
 
 type TidalDownloader struct {
@@ -185,101 +186,90 @@ func (t *TidalDownloader) GetAccessToken() (string, error) {
 }
 
 // GetTrackURLFromISRC looks up a Tidal track directly via the Tidal API using an ISRC.
-// This requires no song.link call, making it resilient to song.link rate limiting.
+// Tries each country in tidalCountryCodes() so region-exclusive tracks are found
+// without needing any environment variable configuration.
 func (t *TidalDownloader) GetTrackURLFromISRC(isrc string) (string, error) {
 	token, err := t.GetAccessToken()
 	if err != nil {
 		return "", fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	// Reuse the existing /v1/tracks/ base64 and strip the trailing slash to get the
-	// query-parameter form: https://api.tidal.com/v1/tracks?isrc=...&countryCode={cc}
 	trackBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9hcGkudGlkYWwuY29tL3YxL3RyYWNrcy8=")
-	searchURL := fmt.Sprintf("%s?isrc=%s&countryCode=%s", strings.TrimSuffix(string(trackBase), "/"), isrc, tidalCountryCode())
+	baseURL := strings.TrimSuffix(string(trackBase), "/")
 
-	req, err := http.NewRequest("GET", searchURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create ISRC lookup request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	for _, cc := range tidalCountryCodes() {
+		searchURL := fmt.Sprintf("%s?isrc=%s&countryCode=%s", baseURL, isrc, cc)
+		req, err := http.NewRequest("GET", searchURL, nil)
+		if err != nil {
+			return "", fmt.Errorf("failed to create ISRC lookup request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("Tidal ISRC lookup failed: %w", err)
+		resp, err := t.client.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("Tidal ISRC lookup failed: %w", err)
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			continue
+		}
+		var result struct {
+			Items []TidalTrack `json:"items"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if decodeErr != nil || len(result.Items) == 0 {
+			continue
+		}
+		tidalURL := fmt.Sprintf("https://tidal.com/track/%d", result.Items[0].ID)
+		fmt.Fprintf(os.Stderr, "✓ Found Tidal track via ISRC %s (countryCode=%s): %s\n", isrc, cc, tidalURL)
+		return tidalURL, nil
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("Tidal ISRC lookup returned HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Items []TidalTrack `json:"items"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to decode Tidal ISRC response: %w", err)
-	}
-
-	if len(result.Items) == 0 {
-		return "", fmt.Errorf("track not found on Tidal for ISRC %s", isrc)
-	}
-
-	tidalURL := fmt.Sprintf("https://tidal.com/track/%d", result.Items[0].ID)
-	fmt.Fprintf(os.Stderr, "✓ Found Tidal track via ISRC %s: %s\n", isrc, tidalURL)
-	return tidalURL, nil
+	return "", fmt.Errorf("track not found on Tidal for ISRC %s in any market", isrc)
 }
 
 // SearchTrackByText finds a Tidal track URL by searching artist + title directly via
-// the Tidal search API. This requires no ISRC and no song.link call.
+// the Tidal search API. Tries each country in tidalCountryCodes() automatically.
 func (t *TidalDownloader) SearchTrackByText(artist, title string) (string, error) {
 	token, err := t.GetAccessToken()
 	if err != nil {
 		return "", fmt.Errorf("tidal access token failed: %w", err)
 	}
-	// Derive /v1/search from the existing /v1/tracks/ base.
 	trackBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9hcGkudGlkYWwuY29tL3YxL3RyYWNrcy8=")
 	v1Base := strings.TrimSuffix(string(trackBase), "tracks/")
-	searchURL := fmt.Sprintf("%ssearch?query=%s&types=TRACKS&limit=5&countryCode=%s",
-		v1Base, url.QueryEscape(artist+" "+title), tidalCountryCode())
+	query := url.QueryEscape(artist + " " + title)
 
-	req, err := http.NewRequest("GET", searchURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create Tidal search request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("Tidal search request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		preview := string(body)
-		if len(preview) > 200 {
-			preview = preview[:200]
+	for _, cc := range tidalCountryCodes() {
+		searchURL := fmt.Sprintf("%ssearch?query=%s&types=TRACKS&limit=5&countryCode=%s", v1Base, query, cc)
+		req, err := http.NewRequest("GET", searchURL, nil)
+		if err != nil {
+			return "", fmt.Errorf("failed to create Tidal search request: %w", err)
 		}
-		return "", fmt.Errorf("Tidal search returned HTTP %d: %s", resp.StatusCode, preview)
-	}
+		req.Header.Set("Authorization", "Bearer "+token)
 
-	var result struct {
-		Tracks struct {
-			Items []TidalTrack `json:"items"`
-		} `json:"tracks"`
+		resp, err := t.client.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("Tidal search request failed: %w", err)
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			continue
+		}
+		var result struct {
+			Tracks struct {
+				Items []TidalTrack `json:"items"`
+			} `json:"tracks"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if decodeErr != nil || len(result.Tracks.Items) == 0 {
+			continue
+		}
+		tidalURL := fmt.Sprintf("https://tidal.com/track/%d", result.Tracks.Items[0].ID)
+		fmt.Fprintf(os.Stderr, "✓ Found Tidal track via text search (%q): %s\n", result.Tracks.Items[0].Title, tidalURL)
+		return tidalURL, nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to decode Tidal search response: %w", err)
-	}
-
-	if len(result.Tracks.Items) == 0 {
-		return "", fmt.Errorf("no results on Tidal for: %s - %s", artist, title)
-	}
-
-	tidalURL := fmt.Sprintf("https://tidal.com/track/%d", result.Tracks.Items[0].ID)
-	fmt.Fprintf(os.Stderr, "✓ Found Tidal track via text search (%q): %s\n", result.Tracks.Items[0].Title, tidalURL)
-	return tidalURL, nil
+	return "", fmt.Errorf("no results on Tidal for: %s - %s in any market", artist, title)
 }
 
 func (t *TidalDownloader) GetTidalURLFromSpotify(spotifyTrackID string) (string, error) {
@@ -369,33 +359,33 @@ func (t *TidalDownloader) GetTrackInfoByID(trackID int64) (*TidalTrack, error) {
 	}
 
 	trackBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9hcGkudGlkYWwuY29tL3YxL3RyYWNrcy8=")
-	trackURL := fmt.Sprintf("%s%d?countryCode=%s", string(trackBase), trackID, tidalCountryCode())
 
-	req, err := http.NewRequest("GET", trackURL, nil)
-	if err != nil {
-		return nil, err
+	for _, cc := range tidalCountryCodes() {
+		trackURL := fmt.Sprintf("%s%d?countryCode=%s", string(trackBase), trackID, cc)
+		req, err := http.NewRequest("GET", trackURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err := t.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			continue
+		}
+		var trackInfo TidalTrack
+		decodeErr := json.NewDecoder(resp.Body).Decode(&trackInfo)
+		resp.Body.Close()
+		if decodeErr != nil {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "Found: %s (%s)\n", trackInfo.Title, trackInfo.AudioQuality)
+		return &trackInfo, nil
 	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to get track info: HTTP %d - %s", resp.StatusCode, string(body))
-	}
-
-	var trackInfo TidalTrack
-	if err := json.NewDecoder(resp.Body).Decode(&trackInfo); err != nil {
-		return nil, err
-	}
-
-	fmt.Fprintf(os.Stderr, "Found: %s (%s)\n", trackInfo.Title, trackInfo.AudioQuality)
-	return &trackInfo, nil
+	return nil, fmt.Errorf("failed to get track info for ID %d in any market", trackID)
 }
 
 func (t *TidalDownloader) GetDownloadURL(trackID int64, quality string) (string, error) {

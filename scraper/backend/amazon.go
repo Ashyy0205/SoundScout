@@ -73,9 +73,15 @@ func NewAmazonDownloader() *AmazonDownloader {
 	}
 }
 
-// amazonMusicTerritory returns the Amazon Music territory for URL construction.
-// Override with AMAZON_MUSIC_TERRITORY env var (e.g. GB, DE, AU). Defaults to US.
-func amazonMusicTerritory() string {
+// amazonMusicTerritoryFromURL tries to extract the musicTerritory query parameter
+// from a song.link Amazon URL so no env var is needed. Falls back to the
+// AMAZON_MUSIC_TERRITORY env var, then "US".
+func amazonMusicTerritoryFromURL(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil {
+		if t := u.Query().Get("musicTerritory"); t != "" {
+			return strings.ToUpper(t)
+		}
+	}
 	if t := strings.TrimSpace(os.Getenv("AMAZON_MUSIC_TERRITORY")); t != "" {
 		return strings.ToUpper(t)
 	}
@@ -195,7 +201,7 @@ func (a *AmazonDownloader) GetAmazonURLFromSpotify(spotifyTrackID string) (strin
 		if len(parts) > 1 {
 			trackAsin := strings.Split(parts[1], "&")[0]
 			musicBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9tdXNpYy5hbWF6b24uY29tL3RyYWNrcy8=")
-			amazonURL = fmt.Sprintf("%s%s?musicTerritory=%s", string(musicBase), trackAsin, amazonMusicTerritory())
+			amazonURL = fmt.Sprintf("%s%s?musicTerritory=%s", string(musicBase), trackAsin, amazonMusicTerritoryFromURL(amazonURL))
 		}
 	}
 
