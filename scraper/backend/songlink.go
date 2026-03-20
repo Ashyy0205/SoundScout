@@ -99,7 +99,7 @@ func (s *SongLinkClient) GetAllURLsFromSpotify(spotifyTrackID string) (*SongLink
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			if i < maxRetries-1 {
-				waitTime := time.Duration(65<<uint(i)) * time.Second // 65s, 130s
+				waitTime := time.Duration(10<<uint(i)) * time.Second // 10s, 20s
 				fmt.Fprintf(os.Stderr, "Rate limited by song.link, waiting %v before retry...\n", waitTime)
 				time.Sleep(waitTime)
 				s.apiCallCount = 0
@@ -221,7 +221,7 @@ func (s *SongLinkClient) CheckTrackAvailability(spotifyTrackID string, isrc stri
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			if i < maxRetries-1 {
-				waitTime := time.Duration(65<<uint(i)) * time.Second // 65s, 130s
+				waitTime := time.Duration(10<<uint(i)) * time.Second // 10s, 20s
 				fmt.Fprintf(os.Stderr, "Rate limited by song.link, waiting %v before retry...\n", waitTime)
 				time.Sleep(waitTime)
 				s.apiCallCount = 0
@@ -376,7 +376,7 @@ func (s *SongLinkClient) GetDeezerURLFromSpotify(spotifyTrackID string) (string,
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			if i < maxRetries-1 {
-				waitTime := time.Duration(65<<uint(i)) * time.Second // 65s, 130s
+				waitTime := time.Duration(10<<uint(i)) * time.Second // 10s, 20s
 				fmt.Fprintf(os.Stderr, "Rate limited by song.link, waiting %v before retry...\n", waitTime)
 				time.Sleep(waitTime)
 				s.apiCallCount = 0
@@ -528,7 +528,7 @@ func (s *SongLinkClient) GetAllPlatformURLs(spotifyTrackID string) (*AllPlatform
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			if i < maxRetries-1 {
-				waitTime := time.Duration(65<<uint(i)) * time.Second // 65s, 130s
+				waitTime := time.Duration(10<<uint(i)) * time.Second // 10s, 20s
 				fmt.Fprintf(os.Stderr, "Rate limited by song.link, waiting %v before retry...\n", waitTime)
 				time.Sleep(waitTime)
 				s.apiCallCount = 0

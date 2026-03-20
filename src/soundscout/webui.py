@@ -452,6 +452,7 @@ def _save_history_entry(job: dict) -> None:
         "failed_tracks":    int(job.get("failed_tracks") or 0),
         "failed_tracks_list": list(job.get("failed_tracks_list") or []),
         "skipped":          int(job.get("skipped") or 0),
+        "last_error":       (job.get("last_error") or "")[:2000],
     }
     with _history_lock:
         history = _load_history()
@@ -3335,38 +3336,61 @@ def _effective_mode(subscribers: dict) -> str:
     return "future"
 
 
+# Tracks accumulated within one monitor loop tick — submitted as a single batch job.
+_monitor_pending_batch: list[dict] = []
+
+
 def _monitor_trigger_track(artist: str, title: str) -> None:
-    """Queue a single track download from the monitoring system."""
-    try:
-        if _track_in_library(artist, title):
-            return
-        job_id = f"monitor_{int(time.time())}_{secrets.token_hex(4)}"
-        job = {
-            "id": job_id,
-            "type": "track",
-            "artist": artist,
-            "title": title,
-            "status": "queued",
-            "created_at": time.time(),
-            "started_at": None,
-            "finished_at": None,
-            "message": "Queued (monitor)",
-            "tracks": [{"artist": artist, "title": title}],
-            "total_tracks": 1,
-            "completed_tracks": 0,
-            "failed_tracks": 0,
-            "failed_tracks_list": [],
-            "submitted_by": "",
-            "last_error": "",
-            "last_output": "",
-        }
-        with _download_lock:
-            download_status[job_id] = job
-            _download_queue.append(job_id)
-        _ensure_download_worker()
-        _persist_queue()
-    except Exception as e:
-        logger.error(f"Monitor: failed to queue {artist} - {title}: {e}")
+    """Accumulate a track into the current monitor tick's batch.
+    Actual queuing happens at the end of _monitor_loop once all artists are processed."""
+    if not artist or not title:
+        return
+    if _track_in_library(artist, title):
+        return
+    _monitor_pending_batch.append({"artist": artist, "title": title})
+
+
+def _monitor_trigger_batch(tracks: list[dict]) -> None:
+    """Queue all accumulated monitor tracks as a single batch download job."""
+    if not tracks:
+        return
+    # Deduplicate while preserving order.
+    seen: set[tuple[str, str]] = set()
+    unique: list[dict] = []
+    for t in tracks:
+        key = (t["artist"].lower(), t["title"].lower())
+        if key not in seen:
+            seen.add(key)
+            unique.append(t)
+    if not unique:
+        return
+    job_id = f"monitor_{int(time.time())}_{secrets.token_hex(4)}"
+    label = unique[0]["artist"] if len(unique) == 1 else f"{len(unique)} tracks"
+    job = {
+        "id": job_id,
+        "type": "track",
+        "artist": "Monitor",
+        "title": label,
+        "status": "queued",
+        "created_at": time.time(),
+        "started_at": None,
+        "finished_at": None,
+        "message": "Queued (monitor batch)",
+        "tracks": unique,
+        "total_tracks": len(unique),
+        "completed_tracks": 0,
+        "failed_tracks": 0,
+        "failed_tracks_list": [],
+        "submitted_by": "",
+        "last_error": "",
+        "last_output": "",
+    }
+    with _download_lock:
+        download_status[job_id] = job
+        _download_queue.append(job_id)
+    _ensure_download_worker()
+    _persist_queue()
+    logger.info(f"Monitor: queued batch of {len(unique)} track(s) as job {job_id}")
 
 
 def _monitor_process_artist(artist_name: str) -> None:
@@ -3494,14 +3518,24 @@ def _monitor_process_artist(artist_name: str) -> None:
 
 def _monitor_loop() -> None:
     """Background daemon: check monitored artists every minute (2 h action gate)."""
+    global _monitor_pending_batch
     while True:
         try:
+            _monitor_pending_batch = []
             data = _load_monitor_data()
             for artist_name in list(data.keys()):
                 try:
                     _monitor_process_artist(artist_name)
                 except Exception as e:
                     logger.error(f"Monitor: error processing '{artist_name}': {e}")
+            # Submit all pending tracks as one batch job so the scraper handles
+            # song.link resolution with a single client (respecting rate limits
+            # properly) rather than N parallel processes all hammering the API.
+            if _monitor_pending_batch:
+                try:
+                    _monitor_trigger_batch(_monitor_pending_batch)
+                except Exception as e:
+                    logger.error(f"Monitor: failed to queue batch: {e}")
         except Exception as e:
             logger.error(f"Monitor loop error: {e}")
         time.sleep(60)
@@ -3778,8 +3812,15 @@ def _execute_batch_download(job: dict, tracks: list[dict]) -> None:
         _library_index_cache["ts"] = 0.0
 
         if timed_out:
+            err_msg = f"Batch timed out after {total_timeout}s"
             with _download_lock:
-                job["last_error"] = f"Batch timed out after {total_timeout}s"
+                job["last_error"] = err_msg
+                already_done = int(job.get("completed_tracks") or 0) + int(job.get("failed_tracks") or 0)
+                for t in tracks[already_done:]:
+                    job["failed_tracks"] = int(job.get("failed_tracks") or 0) + 1
+                    job.setdefault("failed_tracks_list", []).append(
+                        {"artist": t["artist"], "title": t["title"], "error": err_msg}
+                    )
 
     except Exception as e:
         with _download_lock:

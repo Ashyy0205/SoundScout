@@ -200,7 +200,7 @@ func (t *TidalDownloader) GetTidalURLFromSpotify(spotifyTrackID string) (string,
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			if i < maxRetries-1 {
-				waitTime := time.Duration(65<<uint(i)) * time.Second // 65s, 130s
+				waitTime := time.Duration(10<<uint(i)) * time.Second // 10s, 20s
 				fmt.Fprintf(os.Stderr, "Rate limited by song.link, waiting %v before retry...\n", waitTime)
 				time.Sleep(waitTime)
 				continue
