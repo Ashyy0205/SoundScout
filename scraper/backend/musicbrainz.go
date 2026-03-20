@@ -263,3 +263,30 @@ func parseMBSearchResult(data map[string]interface{}, confirmedISRC string) (*MB
 
 	return rec, nil
 }
+
+// LookupISRCByArtistTitle searches MusicBrainz by artist+title and returns the
+// first ISRC attached to the matched recording. Returns "", nil when no
+// confident match or no ISRCs are found — never retries on transient errors.
+func LookupISRCByArtistTitle(artist, title string) (string, error) {
+	rec, err := SearchMBRecording(artist, title)
+	if err != nil || rec == nil || rec.TrackID == "" {
+		return "", err
+	}
+	// Fetch the full recording with ISRCs included.
+	endpoint := fmt.Sprintf("%s/recording/%s?fmt=json&inc=isrcs",
+		mbAPIBase, url.PathEscape(rec.TrackID))
+	data, err := mbGetJSON(endpoint)
+	if err != nil || data == nil {
+		return "", err
+	}
+	isrcs, _ := data["isrcs"].([]interface{})
+	for _, v := range isrcs {
+		if s, ok := v.(string); ok && s != "" {
+			s = strings.ToUpper(strings.ReplaceAll(s, "-", ""))
+			if len(s) == 12 {
+				return s, nil
+			}
+		}
+	}
+	return "", nil
+}

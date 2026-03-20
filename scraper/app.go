@@ -999,15 +999,36 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 					Error:   "Spotify ID or ISRC is required for Tidal",
 				}, fmt.Errorf("spotify ID or ISRC is required for Tidal")
 			}
-			// Try ISRC-based Tidal lookup first — hits the Tidal API directly so it works
-			// even when song.link is rate-limiting us. The ISRC comes from the Spotify
-			// metadata pre-fetch in Phase 1 at zero extra wall-clock cost.
+			// Resolution order (each step only runs if the previous produced no URL):
+			//   1. ISRC from pre-fetch → Tidal ISRC API
+			//   2. MusicBrainz artist+title → ISRC → Tidal ISRC API
+			//   3. Artist+Title → Tidal search API    (no ISRC needed)
+			//   4. SpotifyID → song.link              (last resort)
+			tidalISRC := req.ISRC
+			if !isValidISRC(tidalISRC) {
+				tidalISRC = ""
+			}
+			if tidalISRC == "" && req.ArtistName != "" && req.TrackName != "" {
+				if mbISRC, mbErr := backend.LookupISRCByArtistTitle(req.ArtistName, req.TrackName); mbErr == nil && mbISRC != "" {
+					tidalISRC = mbISRC
+					fmt.Fprintf(os.Stderr, "  ✓ MusicBrainz found ISRC %s\n", tidalISRC)
+				} else if mbErr != nil {
+					fmt.Fprintf(os.Stderr, "  MusicBrainz ISRC lookup failed (%v)\n", mbErr)
+				}
+			}
 			tidalURL := ""
-			if req.ISRC != "" && isValidISRC(req.ISRC) {
-				if url, isrcErr := downloader.GetTrackURLFromISRC(req.ISRC); isrcErr == nil {
-					tidalURL = url
+			if tidalISRC != "" {
+				if u, isrcErr := downloader.GetTrackURLFromISRC(tidalISRC); isrcErr == nil {
+					tidalURL = u
 				} else {
-					fmt.Fprintf(os.Stderr, "  ISRC Tidal lookup failed (%v), falling back to song.link\n", isrcErr)
+					fmt.Fprintf(os.Stderr, "  ISRC Tidal lookup failed (%v), trying text search\n", isrcErr)
+				}
+			}
+			if tidalURL == "" && req.ArtistName != "" && req.TrackName != "" {
+				if u, searchErr := downloader.SearchTrackByText(req.ArtistName, req.TrackName); searchErr == nil {
+					tidalURL = u
+				} else {
+					fmt.Fprintf(os.Stderr, "  Tidal text search failed (%v), falling back to song.link\n", searchErr)
 				}
 			}
 			if tidalURL != "" {
@@ -1016,8 +1037,8 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 				if req.SpotifyID == "" {
 					return DownloadResponse{
 						Success: false,
-						Error:   "Tidal: ISRC lookup failed and no Spotify ID available",
-					}, fmt.Errorf("tidal: ISRC lookup failed and no Spotify ID available")
+						Error:   "Tidal: all lookup methods failed (no Spotify ID for song.link fallback)",
+					}, fmt.Errorf("tidal: all lookup methods failed")
 				}
 				filename, err = downloader.Download(req.SpotifyID, req.OutputDir, req.AudioFormat, req.FilenameFormat, req.TrackNumber, req.Position, req.TrackName, req.ArtistName, req.AlbumName, req.AlbumArtist, req.ReleaseDate, req.UseAlbumTrackNumber, req.CoverURL, req.EmbedMaxQualityCover, req.SpotifyTrackNumber, req.SpotifyDiscNumber, req.SpotifyTotalTracks, req.SpotifyTotalDiscs, req.Copyright, req.Publisher, spotifyURL)
 			}
@@ -1040,6 +1061,28 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 
 		if len(deezerISRC) != 12 || !isValidISRC(deezerISRC) {
 			deezerISRC = ""
+		}
+
+		// Resolution order for ISRC:
+		//   1. ISRC from pre-fetch (already in req.ISRC)
+		//   2. MusicBrainz artist+title → ISRC
+		//   3. Qobuz artist+title search → ISRC  (no song.link, no ISRC needed)
+		//   4. SpotifyID → song.link → Deezer ISRC (last resort)
+		if deezerISRC == "" && req.ArtistName != "" && req.TrackName != "" {
+			if mbISRC, mbErr := backend.LookupISRCByArtistTitle(req.ArtistName, req.TrackName); mbErr == nil && mbISRC != "" {
+				deezerISRC = mbISRC
+				fmt.Fprintf(os.Stderr, "  ✓ MusicBrainz found ISRC %s for Qobuz\n", deezerISRC)
+			} else if mbErr != nil {
+				fmt.Fprintf(os.Stderr, "  MusicBrainz ISRC lookup failed (%v)\n", mbErr)
+			}
+		}
+		if deezerISRC == "" && req.ArtistName != "" && req.TrackName != "" {
+			if qbTrack, searchErr := downloader.SearchByText(req.ArtistName, req.TrackName); searchErr == nil && qbTrack.ISRC != "" {
+				deezerISRC = qbTrack.ISRC
+				fmt.Fprintf(os.Stderr, "  ✓ Qobuz text search found ISRC %s\n", deezerISRC)
+			} else if searchErr != nil {
+				fmt.Fprintf(os.Stderr, "  Qobuz text search failed (%v), trying song.link\n", searchErr)
+			}
 		}
 
 		if deezerISRC == "" && req.SpotifyID != "" {

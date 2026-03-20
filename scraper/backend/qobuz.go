@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -122,6 +123,44 @@ func NewQobuzDownloader() *QobuzDownloader {
 		},
 		appID: "798273057",
 	}
+}
+
+// SearchByText searches Qobuz by artist + title and returns the best matching track.
+// This requires no ISRC and no song.link call.
+func (q *QobuzDownloader) SearchByText(artist, title string) (*QobuzTrack, error) {
+	apiBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly93d3cucW9idXouY29tL2FwaS5qc29uLzAuMi90cmFjay9zZWFyY2g/cXVlcnk9")
+	query := url.QueryEscape(artist + " " + title)
+	searchURL := fmt.Sprintf("%s%s&limit=5&app_id=%s", string(apiBase), query, q.appID)
+
+	resp, err := q.client.Get(searchURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search track: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if len(body) == 0 {
+		return nil, fmt.Errorf("API returned empty response")
+	}
+
+	var searchResp QobuzSearchResponse
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	if len(searchResp.Tracks.Items) == 0 {
+		return nil, fmt.Errorf("track not found on Qobuz for: %s - %s", artist, title)
+	}
+
+	track := &searchResp.Tracks.Items[0]
+	fmt.Fprintf(os.Stderr, "✓ Found Qobuz track via text search (%q, ISRC %s)\n", track.Title, track.ISRC)
+	return track, nil
 }
 
 func (q *QobuzDownloader) SearchByISRC(isrc string) (*QobuzTrack, error) {

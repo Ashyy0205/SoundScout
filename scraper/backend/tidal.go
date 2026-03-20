@@ -220,6 +220,58 @@ func (t *TidalDownloader) GetTrackURLFromISRC(isrc string) (string, error) {
 	return tidalURL, nil
 }
 
+// SearchTrackByText finds a Tidal track URL by searching artist + title directly via
+// the Tidal search API. This requires no ISRC and no song.link call.
+func (t *TidalDownloader) SearchTrackByText(artist, title string) (string, error) {
+	token, err := t.GetAccessToken()
+	if err != nil {
+		return "", fmt.Errorf("tidal access token failed: %w", err)
+	}
+	// Derive /v1/search from the existing /v1/tracks/ base.
+	trackBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9hcGkudGlkYWwuY29tL3YxL3RyYWNrcy8=")
+	v1Base := strings.TrimSuffix(string(trackBase), "tracks/")
+	searchURL := fmt.Sprintf("%ssearch?query=%s&types=TRACKS&limit=5&countryCode=US",
+		v1Base, url.QueryEscape(artist+" "+title))
+
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create Tidal search request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Tidal search request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		preview := string(body)
+		if len(preview) > 200 {
+			preview = preview[:200]
+		}
+		return "", fmt.Errorf("Tidal search returned HTTP %d: %s", resp.StatusCode, preview)
+	}
+
+	var result struct {
+		Tracks struct {
+			Items []TidalTrack `json:"items"`
+		} `json:"tracks"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode Tidal search response: %w", err)
+	}
+
+	if len(result.Tracks.Items) == 0 {
+		return "", fmt.Errorf("no results on Tidal for: %s - %s", artist, title)
+	}
+
+	tidalURL := fmt.Sprintf("https://tidal.com/track/%d", result.Tracks.Items[0].ID)
+	fmt.Fprintf(os.Stderr, "✓ Found Tidal track via text search (%q): %s\n", result.Tracks.Items[0].Title, tidalURL)
+	return tidalURL, nil
+}
+
 func (t *TidalDownloader) GetTidalURLFromSpotify(spotifyTrackID string) (string, error) {
 
 	spotifyBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9vcGVuLnNwb3RpZnkuY29tL3RyYWNrLw==")
