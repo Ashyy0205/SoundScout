@@ -16,6 +16,16 @@ import (
 	"time"
 )
 
+// tidalCountryCode returns the Tidal market to use for API calls.
+// Override with the TIDAL_COUNTRY_CODE environment variable (e.g. GB, AU, DE).
+// Defaults to US.
+func tidalCountryCode() string {
+	if cc := strings.TrimSpace(os.Getenv("TIDAL_COUNTRY_CODE")); cc != "" {
+		return strings.ToUpper(cc)
+	}
+	return "US"
+}
+
 type TidalDownloader struct {
 	client       *http.Client
 	timeout      time.Duration
@@ -183,9 +193,9 @@ func (t *TidalDownloader) GetTrackURLFromISRC(isrc string) (string, error) {
 	}
 
 	// Reuse the existing /v1/tracks/ base64 and strip the trailing slash to get the
-	// query-parameter form: https://api.tidal.com/v1/tracks?isrc=...&countryCode=US
+	// query-parameter form: https://api.tidal.com/v1/tracks?isrc=...&countryCode={cc}
 	trackBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9hcGkudGlkYWwuY29tL3YxL3RyYWNrcy8=")
-	searchURL := fmt.Sprintf("%s?isrc=%s&countryCode=US", strings.TrimSuffix(string(trackBase), "/"), isrc)
+	searchURL := fmt.Sprintf("%s?isrc=%s&countryCode=%s", strings.TrimSuffix(string(trackBase), "/"), isrc, tidalCountryCode())
 
 	req, err := http.NewRequest("GET", searchURL, nil)
 	if err != nil {
@@ -230,8 +240,8 @@ func (t *TidalDownloader) SearchTrackByText(artist, title string) (string, error
 	// Derive /v1/search from the existing /v1/tracks/ base.
 	trackBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9hcGkudGlkYWwuY29tL3YxL3RyYWNrcy8=")
 	v1Base := strings.TrimSuffix(string(trackBase), "tracks/")
-	searchURL := fmt.Sprintf("%ssearch?query=%s&types=TRACKS&limit=5&countryCode=US",
-		v1Base, url.QueryEscape(artist+" "+title))
+	searchURL := fmt.Sprintf("%ssearch?query=%s&types=TRACKS&limit=5&countryCode=%s",
+		v1Base, url.QueryEscape(artist+" "+title), tidalCountryCode())
 
 	req, err := http.NewRequest("GET", searchURL, nil)
 	if err != nil {
@@ -359,7 +369,7 @@ func (t *TidalDownloader) GetTrackInfoByID(trackID int64) (*TidalTrack, error) {
 	}
 
 	trackBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9hcGkudGlkYWwuY29tL3YxL3RyYWNrcy8=")
-	trackURL := fmt.Sprintf("%s%d?countryCode=US", string(trackBase), trackID)
+	trackURL := fmt.Sprintf("%s%d?countryCode=%s", string(trackBase), trackID, tidalCountryCode())
 
 	req, err := http.NewRequest("GET", trackURL, nil)
 	if err != nil {
