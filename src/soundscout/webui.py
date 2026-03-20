@@ -449,6 +449,7 @@ def _save_history_entry(job: dict) -> None:
         "finished_at":      job.get("finished_at"),
         "total_tracks":     int(job.get("total_tracks") or 0),
         "completed_tracks": int(job.get("completed_tracks") or 0),
+        "completed_tracks_list": list(job.get("completed_tracks_list") or []),
         "failed_tracks":    int(job.get("failed_tracks") or 0),
         "failed_tracks_list": list(job.get("failed_tracks_list") or []),
         "skipped":          int(job.get("skipped") or 0),
@@ -3716,6 +3717,8 @@ def _execute_batch_download(job: dict, tracks: list[dict]) -> None:
         _DOWNLOADING_RE   = _re.compile(r'^\[(\d+)/(\d+)\] Downloading: (.+?) - (.+?)$')
 
         output_tail: list[str] = [""]
+        # Map "artist|||title" -> download start timestamp for per-track timing.
+        _track_start_times: dict[str, float] = {}
 
         def _reader() -> None:
             try:
@@ -3748,6 +3751,11 @@ def _execute_batch_download(job: dict, tracks: list[dict]) -> None:
                             job["current_track"] = {"artist": t_a, "title": t_t}
                             job["message"] = f"Downloaded {done}/{len(tracks)}: {t_a} \u2013 {t_t}"
                             job["last_error"] = ""
+                            _key = f"{t_a}|||{t_t}"
+                            _dur = round(time.time() - _track_start_times[_key], 1) if _key in _track_start_times else None
+                            job.setdefault("completed_tracks_list", []).append(
+                                {"artist": t_a, "title": t_t, "duration_s": _dur}
+                            )
                         elif m_fail:
                             t_a, t_t, err = m_fail.group(1), m_fail.group(2), m_fail.group(3)
                             job["failed_tracks"] = int(job.get("failed_tracks") or 0) + 1
@@ -3756,13 +3764,16 @@ def _execute_batch_download(job: dict, tracks: list[dict]) -> None:
                             job["current_track"] = {"artist": t_a, "title": t_t}
                             job["message"] = f"Failed {done}/{len(tracks)}: {t_a} \u2013 {t_t}"
                             job["last_error"] = err
+                            _key = f"{t_a}|||{t_t}"
+                            _dur = round(time.time() - _track_start_times[_key], 1) if _key in _track_start_times else None
                             job.setdefault("failed_tracks_list", []).append(
-                                {"artist": t_a, "title": t_t, "error": err}
+                                {"artist": t_a, "title": t_t, "error": err, "duration_s": _dur}
                             )
                         elif m_dl:
                             n, total_str, t_a, t_t = m_dl.group(1), m_dl.group(2), m_dl.group(3), m_dl.group(4)
                             job["current_track"] = {"artist": t_a, "title": t_t}
                             job["message"] = f"Downloading {n}/{total_str}: {t_a} \u2013 {t_t}"
+                            _track_start_times[f"{t_a}|||{t_t}"] = time.time()
                         elif m_res:
                             t_a, t_t = m_res.group(2), m_res.group(3)
                             job["current_track"] = {"artist": t_a, "title": t_t}
