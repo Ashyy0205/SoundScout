@@ -89,6 +89,7 @@ let navLibraryBtn = null;
 let navDownloadsBtn = null;
 let navSettingsBtn = null;
 let navImportBtn = null;
+let navOrganiseBtn = null;
 let navShazamBtn = null;
 
 let previewAudio = null;
@@ -341,6 +342,16 @@ document.addEventListener('DOMContentLoaded', () => {
             viewStack = [];
             setActiveNav('import');
             openImport();
+        });
+    }
+
+    navOrganiseBtn = document.getElementById('navOrganiseBtn');
+    if (navOrganiseBtn && !navOrganiseBtn.dataset.bound) {
+        navOrganiseBtn.dataset.bound = '1';
+        navOrganiseBtn.addEventListener('click', () => {
+            viewStack = [];
+            setActiveNav('organise');
+            openOrganise();
         });
     }
 
@@ -1306,6 +1317,7 @@ function setActiveNav(which) {
     if (navDownloadsBtn) navDownloadsBtn.classList.toggle('is-active', w === 'downloads');
     if (navSettingsBtn) navSettingsBtn.classList.toggle('is-active', w === 'settings');
     if (navImportBtn) navImportBtn.classList.toggle('is-active', w === 'import');
+    if (navOrganiseBtn) navOrganiseBtn.classList.toggle('is-active', w === 'organise');
     if (navShazamBtn) navShazamBtn.classList.toggle('is-active', w === 'scout');
     updateTopbarVisibility();
 }
@@ -3874,6 +3886,259 @@ function _renderScoutMicBlocked(token) {
         </div>
     `;
     currentView = { kind: 'scout', state: null };
+}
+
+// ============================================================
+//  ORGANISE VIEW
+// ============================================================
+
+let _organiseScanData = null;  // cached scan result
+
+function openOrganise() {
+    if (authRequired && !authAuthed) return;
+
+    beginView('organise');
+    currentView = { kind: 'organise', state: null };
+
+    setResultsMode('list');
+    setViewHeader(`<div class="view-title">Organise Library</div>`);
+    setLoading(false);
+
+    _renderOrganiseShell();
+}
+
+function _renderOrganiseShell() {
+    const rc = document.getElementById('resultsContainer');
+    if (!rc) return;
+
+    const cachedSummary = _organiseScanData ? _renderOrganiseSummaryHtml(_organiseScanData) : '';
+
+    rc.innerHTML = `
+        <div class="import-header">
+            <p>Scan your music library and rename folders and track files to match
+            SoundScout's naming scheme — <em>Artist&nbsp;/ Album&nbsp;/ Title.flac</em>.</p>
+            <p>Folders with a year suffix such as <em>Bewitched (2023)</em> will be
+            renamed to <em>Bewitched</em>. If a correctly-named folder already exists, the
+            two folders are <strong>merged</strong> so all tracks end up in one place.
+            Track files are renamed to just their title, stripping any leading artist,
+            album or track-number prefix.</p>
+        </div>
+
+        <div class="organise-warning-box">
+            <strong>Plex notice</strong><br>
+            Renaming files causes Plex to temporarily lose them from its index.
+            A library scan is triggered automatically after applying changes so Plex
+            re-indexes the corrected files using their embedded metadata tags — in most
+            cases play&nbsp;counts and ratings are preserved. For large libraries,
+            consider backing up your Plex database first.
+        </div>
+
+        <div class="import-url-bar" style="margin-top: 1rem;">
+            <button class="nav-btn nav-btn-primary" id="organiseScanBtn" type="button"
+                    onclick="runOrganiseScan()">Scan Library</button>
+        </div>
+
+        <div id="organiseResults">${cachedSummary}</div>
+    `;
+}
+
+async function runOrganiseScan() {
+    if (authRequired && !authAuthed) return;
+
+    const btn = document.getElementById('organiseScanBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+
+    const area = document.getElementById('organiseResults');
+    if (area) area.innerHTML = '<div class="loading"><div class="spinner"></div><p>Scanning library…</p></div>';
+
+    try {
+        const data = await apiFetchJson('/api/organise/scan');
+        _organiseScanData = data;
+        if (area) area.innerHTML = _renderOrganiseSummaryHtml(data);
+    } catch (e) {
+        if (area) area.innerHTML = `<div class="error-message">${escapeHtml(e && e.message ? e.message : 'Scan failed')}</div>`;
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Scan Library'; }
+    }
+}
+
+function _renderOrganiseSummaryHtml(data) {
+    const changes = data.changes || [];
+    const alreadyClean = data.already_clean || 0;
+    const totalAlbums = data.total_albums || 0;
+    const totalRenames = (data.total_track_renames || 0) + (data.total_track_moves || 0);
+    const totalConflicts = data.total_conflicts || 0;
+
+    if (totalAlbums === 0) {
+        return `
+            <div class="downloads-now" style="margin-top:1rem;">
+                <div class="downloads-now-art" aria-hidden="true" style="background:var(--accent);opacity:.15;"></div>
+                <div>
+                    <div class="downloads-now-title">Library is already organised</div>
+                    <div class="downloads-now-sub">${escapeHtml(String(alreadyClean))} album${alreadyClean === 1 ? '' : 's'} checked — no changes needed.</div>
+                </div>
+            </div>`;
+    }
+
+    // Group changes by artist
+    const byArtist = {};
+    for (const ac of changes) {
+        (byArtist[ac.artist] = byArtist[ac.artist] || []).push(ac);
+    }
+
+    let artistHtml = '';
+    for (const [artist, albumChanges] of Object.entries(byArtist)) {
+        let albumHtml = '';
+        for (const ac of albumChanges) {
+            const trackCount = ac.tracks.length;
+            const conflictCount = ac.tracks.filter(t => t.conflict).length;
+            const changeCount = ac.tracks.filter(t => !t.conflict && t.old_name !== t.new_name).length;
+
+            let badge = '';
+            if (ac.folder_rename_needed && ac.is_merge) {
+                badge = '<span class="download-job-badge badge-queued">MERGE</span>';
+            } else if (ac.folder_rename_needed) {
+                badge = '<span class="download-job-badge badge-queued">RENAME</span>';
+            }
+
+            let folderLine = '';
+            if (ac.folder_rename_needed) {
+                folderLine = `<span class="organise-folder-old">${escapeHtml(ac.old_album)}</span>
+                              <span class="organise-arrow">→</span>
+                              <span class="organise-folder-new">${escapeHtml(ac.new_album)}</span>
+                              ${badge}`;
+            } else {
+                folderLine = `<span class="organise-folder-new">${escapeHtml(ac.new_album)}</span>
+                              <span class="download-job-badge">TRACKS</span>`;
+            }
+
+            let metaParts = [];
+            if (changeCount > 0) metaParts.push(`${changeCount} track${changeCount === 1 ? '' : 's'} to rename`);
+            if (conflictCount > 0) metaParts.push(`${conflictCount} skipped (conflict)`);
+            if (trackCount === 0) metaParts.push('no audio files found');
+
+            let tracksHtml = '';
+            for (const t of ac.tracks) {
+                const cls = t.conflict ? ' organise-track-conflict' : (t.old_name === t.new_name ? ' organise-track-ok' : '');
+                if (t.old_name === t.new_name) continue;  // omit no-change tracks from list
+                const arrow = t.conflict ? '<span class="organise-arrow" title="Skipped — target exists">⊘</span>' : '<span class="organise-arrow">→</span>';
+                tracksHtml += `<li class="organise-track-row${cls}">
+                    <span class="organise-track-old">${escapeHtml(t.old_name)}</span>
+                    ${arrow}
+                    <span class="organise-track-new">${escapeHtml(t.new_name)}</span>
+                </li>`;
+            }
+
+            const tracksBlock = tracksHtml
+                ? `<ul class="organise-track-list">${tracksHtml}</ul>`
+                : '';
+
+            albumHtml += `
+                <details class="organise-album-row">
+                    <summary class="organise-album-summary">
+                        <span class="organise-folder-line">${folderLine}</span>
+                        <span class="organise-album-meta">${escapeHtml(metaParts.join(' · '))}</span>
+                    </summary>
+                    ${tracksBlock}
+                </details>`;
+        }
+
+        artistHtml += `
+            <div class="organise-artist-group">
+                <div class="organise-artist-name">${escapeHtml(artist)}</div>
+                ${albumHtml}
+            </div>`;
+    }
+
+    const conflictNote = totalConflicts > 0
+        ? `<p style="margin-top:.5rem;opacity:.7;font-size:.85rem;">${totalConflicts} file${totalConflicts === 1 ? '' : 's'} will be skipped because a file with the target name already exists in the destination.</p>`
+        : '';
+
+    return `
+        <div class="organise-summary">
+            Found <strong>${totalAlbums}</strong> album${totalAlbums === 1 ? '' : 's'} to fix
+            · <strong>${totalRenames}</strong> track${totalRenames === 1 ? '' : 's'} to rename
+            ${alreadyClean > 0 ? `· ${alreadyClean} already clean` : ''}
+            ${conflictNote}
+        </div>
+
+        <div class="organise-changes-list">${artistHtml}</div>
+
+        <div class="import-url-bar" style="margin-top:1.5rem; gap:.75rem;">
+            <button class="nav-btn nav-btn-primary" type="button"
+                    onclick="runOrganiseApply()">Apply Changes</button>
+            <button class="nav-btn" type="button"
+                    onclick="runOrganiseScan()">Re-scan</button>
+        </div>`;
+}
+
+async function runOrganiseApply() {
+    if (authRequired && !authAuthed) return;
+
+    const area = document.getElementById('organiseResults');
+    if (area) area.innerHTML = '<div class="loading"><div class="spinner"></div><p>Applying changes…</p></div>';
+
+    const applyBtn = area ? area.querySelector('button') : null;
+
+    try {
+        const data = await apiFetchJson('/api/organise/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dry_run: false }),
+        });
+
+        _organiseScanData = null;  // invalidate cache — library has changed
+
+        const filesChanged = (data.files_renamed || 0) + (data.files_moved || 0);
+        const foldersChanged = (data.folders_renamed || 0) + (data.folders_merged || 0);
+        const errors = data.errors || [];
+
+        let summaryParts = [];
+        if (data.files_renamed > 0) summaryParts.push(`${data.files_renamed} track${data.files_renamed === 1 ? '' : 's'} renamed in-place`);
+        if (data.files_moved > 0) summaryParts.push(`${data.files_moved} track${data.files_moved === 1 ? '' : 's'} moved`);
+        if (data.files_skipped > 0) summaryParts.push(`${data.files_skipped} skipped`);
+        if (data.folders_renamed > 0) summaryParts.push(`${data.folders_renamed} folder${data.folders_renamed === 1 ? '' : 's'} renamed`);
+        if (data.folders_merged > 0) summaryParts.push(`${data.folders_merged} folder${data.folders_merged === 1 ? '' : 's'} merged`);
+
+        const plexNote = data.plex_scan_triggered
+            ? '<p class="organise-plex-note">✓ Plex library scan has been triggered — Plex will re-index the changes shortly.</p>'
+            : '<p class="organise-plex-note">Plex scan could not be triggered — run a manual library scan in Plex to re-index changes.</p>';
+
+        const errorBlock = errors.length > 0
+            ? `<details style="margin-top:.75rem;"><summary style="cursor:pointer;opacity:.7;">${errors.length} error${errors.length === 1 ? '' : 's'}</summary>
+               <ul style="margin:.5rem 0 0 1rem;font-size:.82rem;opacity:.7;">${errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul></details>`
+            : '';
+
+        if (filesChanged === 0 && foldersChanged === 0) {
+            if (area) area.innerHTML = `
+                <div class="downloads-now" style="margin-top:1rem;">
+                    <div>
+                        <div class="downloads-now-title">Nothing to change</div>
+                        <div class="downloads-now-sub">Library was already organised.</div>
+                    </div>
+                </div>
+                <div class="import-url-bar" style="margin-top:1rem;">
+                    <button class="nav-btn" type="button" onclick="runOrganiseScan()">Scan Again</button>
+                </div>`;
+        } else {
+            if (area) area.innerHTML = `
+                <div class="organise-result-box">
+                    <div class="organise-result-title">Done</div>
+                    <div class="organise-result-summary">${escapeHtml(summaryParts.join(' · '))}</div>
+                    ${plexNote}
+                    ${errorBlock}
+                </div>
+                <div class="import-url-bar" style="margin-top:1rem;">
+                    <button class="nav-btn" type="button" onclick="runOrganiseScan()">Scan Again</button>
+                </div>`;
+        }
+    } catch (e) {
+        if (area) area.innerHTML = `
+            <div class="error-message">${escapeHtml(e && e.message ? e.message : 'Apply failed')}</div>
+            <div class="import-url-bar" style="margin-top:1rem;">
+                <button class="nav-btn" type="button" onclick="runOrganiseScan()">Try Again</button>
+            </div>`;
+    }
 }
 
 

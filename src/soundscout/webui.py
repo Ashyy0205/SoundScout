@@ -5606,6 +5606,133 @@ def library_check_track():
     return jsonify({"in_library": _track_in_library(artist, title)})
 
 
+# ---------------------------------------------------------------------------
+# Library Organiser
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/organise/scan", methods=["GET"])
+def organise_scan():
+    """Scan the music library and return a preview of all normalisation changes.
+
+    Returns JSON::
+
+        {
+          "changes": [
+            {
+              "artist":              str,   # artist folder name
+              "old_album":           str,   # current album folder name
+              "new_album":           str,   # canonical target album folder name
+              "folder_rename_needed": bool,
+              "is_merge":            bool,  # target folder already exists
+              "tracks": [
+                {
+                  "old_name": str,
+                  "new_name": str,
+                  "conflict": bool   # True → will be skipped (target exists)
+                }
+              ]
+            }
+          ],
+          "already_clean":      int,
+          "total_albums":       int,
+          "total_track_renames": int,
+          "total_track_moves":  int,
+          "total_conflicts":    int
+        }
+    """
+    if WEBUI_REQUIRE_PLEX_LOGIN and not session.get("plex_token"):
+        return jsonify({"error": "Not authenticated"}), 401
+
+    from .organise import scan_library
+
+    try:
+        scan = scan_library(MUSIC_LIBRARY_PATH)
+    except Exception as exc:
+        logger.error("organise_scan error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+    changes = []
+    total_track_renames = 0
+    total_track_moves = 0
+    total_conflicts = 0
+
+    for ac in scan.album_changes:
+        tracks = []
+        for tc in ac.track_changes:
+            tracks.append({
+                "old_name": tc.old_name,
+                "new_name": tc.new_name,
+                "conflict": tc.conflict,
+            })
+            if tc.conflict:
+                total_conflicts += 1
+            elif tc.old_path != tc.new_path:
+                if ac.folder_rename_needed:
+                    total_track_moves += 1
+                else:
+                    total_track_renames += 1
+
+        changes.append({
+            "artist": ac.artist,
+            "old_album": ac.old_album,
+            "new_album": ac.new_album,
+            "folder_rename_needed": ac.folder_rename_needed,
+            "is_merge": ac.is_merge,
+            "tracks": tracks,
+        })
+
+    return jsonify({
+        "changes": changes,
+        "already_clean": scan.already_clean,
+        "total_albums": len(changes),
+        "total_track_renames": total_track_renames,
+        "total_track_moves": total_track_moves,
+        "total_conflicts": total_conflicts,
+    })
+
+
+@app.route("/api/organise/run", methods=["POST"])
+def organise_run():
+    """Apply library normalisation changes.
+
+    Request body (JSON, optional)::
+
+        {"dry_run": false}
+
+    Returns the same summary dict as :func:`apply_changes` plus a
+    ``"plex_scan_triggered"`` boolean.
+    """
+    if WEBUI_REQUIRE_PLEX_LOGIN and not session.get("plex_token"):
+        return jsonify({"error": "Not authenticated"}), 401
+
+    data = request.get_json(silent=True) or {}
+    dry_run = bool(data.get("dry_run", False))
+
+    from .organise import scan_library, apply_changes
+
+    try:
+        scan = scan_library(MUSIC_LIBRARY_PATH)
+        summary = apply_changes(scan, dry_run=dry_run)
+    except Exception as exc:
+        logger.error("organise_run error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+    # Trigger a Plex library scan so renamed/moved files are re-indexed promptly.
+    plex_scan_triggered = False
+    if not dry_run and (summary.get("files_renamed", 0) + summary.get("files_moved", 0)) > 0:
+        try:
+            _, plex_token, plex_baseurl = _get_current_user_run_config()
+            if plex_token and plex_baseurl:
+                pc = PlexClient(plex_baseurl, plex_token, PLEX_MUSIC_LIBRARY)
+                plex_scan_triggered = pc.update_library()
+        except Exception as exc:
+            logger.warning("organise_run: Plex scan trigger failed: %s", exc)
+
+    summary["plex_scan_triggered"] = plex_scan_triggered
+    return jsonify(summary)
+
+
 @app.route("/api/shazam", methods=["POST"])
 def shazam_identify():
     """Identify a short audio clip using Shazam's recognition API.
