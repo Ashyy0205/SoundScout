@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 
 AUDIO_EXTENSIONS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".alac"}
 
-# Matches a trailing "(YYYY)" year annotation on album folder names.
-_YEAR_SUFFIX_RE = re.compile(r"\s*\(\d{4}\)\s*$")
+# Matches a trailing year annotation on album folder names.
+# Handles both parentheses (2023) and square brackets [2023].
+_YEAR_SUFFIX_RE = re.compile(r"\s*[\(\[]\d{4}[\)\]]\s*$")
 
 # Matches a leading track-number prefix in filenames, e.g. "01. ", "02 - ", "3 ".
 _TRACK_NUM_RE = re.compile(r"^\d{1,3}[\s.\-]+")
@@ -154,8 +155,16 @@ def _extract_title(stem: str, artist: str, album: str) -> str:
         if result:
             return result
 
-    # 5. Title - Artist  (reversed)
+    # 5. Title - Artist  (exact, reversed)
     m = re.search(r"\s*-\s*" + _esc(artist) + r"\s*$", stem, re.IGNORECASE)
+    if m:
+        result = stem[: m.start()].strip()
+        if result:
+            return result
+
+    # 5b. Title - Artist, Other / Title - Artist feat. Other
+    #     (artist is a prefix of the trailing credit — handles collaborations)
+    m = re.search(r"\s*-\s*(?=" + _esc(artist) + r"[,\s])", stem, re.IGNORECASE)
     if m:
         result = stem[: m.start()].strip()
         if result:
