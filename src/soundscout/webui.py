@@ -41,13 +41,24 @@ CORS(app)
 # Session configuration (required for Plex login)
 _webui_secret = (os.environ.get("WEBUI_SECRET_KEY") or os.environ.get("SECRET_KEY") or "").strip()
 if not _webui_secret:
-    # Deterministic within-process fallback. For production, set WEBUI_SECRET_KEY.
-    _webui_secret = secrets.token_hex(32)
+    # Persist the key to the config directory so sessions survive server restarts.
+    # A new random key is only generated once; subsequent starts reuse the same key.
+    _secret_key_path = _webui_data_dir() / "secret_key"
+    try:
+        if _secret_key_path.exists():
+            _webui_secret = _secret_key_path.read_text(encoding="utf-8").strip()
+        if not _webui_secret:
+            _webui_secret = secrets.token_hex(32)
+            _secret_key_path.write_text(_webui_secret, encoding="utf-8")
+    except Exception:
+        # Fallback: ephemeral key (sessions won't survive restart, but app still works).
+        _webui_secret = secrets.token_hex(32)
 
 app.secret_key = _webui_secret
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=dt.timedelta(days=90),
 )
 
 # Configuration from environment
@@ -1483,6 +1494,7 @@ def auth_poll(pin_id: str):
             )
 
         stage = "persist_session"
+        session.permanent = True
         session["plex_token"] = token
         session["plex_user"] = user
         if working_baseurl:
