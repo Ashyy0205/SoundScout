@@ -3911,31 +3911,41 @@ function _renderOrganiseShell() {
     const rc = document.getElementById('resultsContainer');
     if (!rc) return;
 
+    const hasResults = _organiseScanData && (_organiseScanData.total_albums > 0);
     const cachedSummary = _organiseScanData ? _renderOrganiseSummaryHtml(_organiseScanData) : '';
 
     rc.innerHTML = `
         <div class="import-header">
-            <p>Scan your music library and rename folders and track files to match
-            SoundScout's naming scheme — <em>Artist&nbsp;/ Album&nbsp;/ Title.flac</em>.</p>
-            <p>Folders with a year suffix such as <em>Bewitched (2023)</em> will be
-            renamed to <em>Bewitched</em>. If a correctly-named folder already exists, the
-            two folders are <strong>merged</strong> so all tracks end up in one place.
-            Track files are renamed to just their title, stripping any leading artist,
-            album or track-number prefix.</p>
+            <p>Fixes your existing music library so that folder and file names match
+            SoundScout's scheme: <code>Artist / Album / Title.flac</code>.</p>
+            <ul class="organise-desc-list">
+                <li><strong>Year suffixes removed</strong> — a folder named
+                <code>Album Name (YYYY)</code> or <code>Album Name [YYYY]</code>
+                becomes <code>Album Name</code>.</li>
+                <li><strong>Duplicate folders merged</strong> — if both
+                <code>Album Name (YYYY)</code> and <code>Album Name</code> exist,
+                their tracks are combined into one folder.</li>
+                <li><strong>Track files cleaned</strong> — prefixes such as
+                <code>Artist - Album - 01 - Title.flac</code> are stripped down
+                to <code>Title.flac</code>.</li>
+            </ul>
         </div>
 
         <div class="organise-warning-box">
-            <strong>Plex notice</strong><br>
-            Renaming files causes Plex to temporarily lose them from its index.
-            A library scan is triggered automatically after applying changes so Plex
-            re-indexes the corrected files using their embedded metadata tags — in most
-            cases play&nbsp;counts and ratings are preserved. For large libraries,
-            consider backing up your Plex database first.
+            <strong>Plex notice —</strong>
+            renaming files causes Plex to temporarily lose them from its index.
+            A library scan is triggered automatically after applying so Plex
+            re-indexes the corrected files via their embedded tags — play counts
+            and ratings are usually preserved.
+            For large libraries, back up your Plex database first.
         </div>
 
-        <div class="import-url-bar" style="margin-top: 1rem;">
+        <div class="organise-action-bar">
             <button class="nav-btn nav-btn-primary" id="organiseScanBtn" type="button"
                     onclick="runOrganiseScan()">Scan Library</button>
+            <button class="nav-btn nav-btn-primary" id="organiseApplyBtn" type="button"
+                    onclick="runOrganiseApply()"
+                    ${hasResults ? '' : 'disabled style="display:none"'}>Apply Changes</button>
         </div>
 
         <div id="organiseResults">${cachedSummary}</div>
@@ -3945,8 +3955,10 @@ function _renderOrganiseShell() {
 async function runOrganiseScan() {
     if (authRequired && !authAuthed) return;
 
-    const btn = document.getElementById('organiseScanBtn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+    const scanBtn = document.getElementById('organiseScanBtn');
+    const applyBtn = document.getElementById('organiseApplyBtn');
+    if (scanBtn) { scanBtn.disabled = true; scanBtn.textContent = 'Scanning…'; }
+    if (applyBtn) { applyBtn.disabled = true; applyBtn.style.display = 'none'; }
 
     const area = document.getElementById('organiseResults');
     if (area) area.innerHTML = '<div class="loading"><div class="spinner"></div><p>Scanning library…</p></div>';
@@ -3955,10 +3967,15 @@ async function runOrganiseScan() {
         const data = await apiFetchJson('/api/organise/scan');
         _organiseScanData = data;
         if (area) area.innerHTML = _renderOrganiseSummaryHtml(data);
+        // Show apply button only when there is something to fix
+        if (applyBtn && data.total_albums > 0) {
+            applyBtn.disabled = false;
+            applyBtn.style.display = '';
+        }
     } catch (e) {
         if (area) area.innerHTML = `<div class="error-message">${escapeHtml(e && e.message ? e.message : 'Scan failed')}</div>`;
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Scan Library'; }
+        if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = 'Scan Library'; }
     }
 }
 
@@ -4062,14 +4079,7 @@ function _renderOrganiseSummaryHtml(data) {
             ${conflictNote}
         </div>
 
-        <div class="organise-changes-list">${artistHtml}</div>
-
-        <div class="import-url-bar" style="margin-top:1.5rem; gap:.75rem;">
-            <button class="nav-btn nav-btn-primary" type="button"
-                    onclick="runOrganiseApply()">Apply Changes</button>
-            <button class="nav-btn" type="button"
-                    onclick="runOrganiseScan()">Re-scan</button>
-        </div>`;
+        <div class="organise-changes-list">${artistHtml}</div>`;
 }
 
 async function runOrganiseApply() {
@@ -4109,6 +4119,10 @@ async function runOrganiseApply() {
                <ul style="margin:.5rem 0 0 1rem;font-size:.82rem;opacity:.7;">${errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul></details>`
             : '';
 
+        // Hide apply button after it has been used; scan can re-enable it
+        const applyBtnPost = document.getElementById('organiseApplyBtn');
+        if (applyBtnPost) { applyBtnPost.disabled = true; applyBtnPost.style.display = 'none'; }
+
         if (filesChanged === 0 && foldersChanged === 0) {
             if (area) area.innerHTML = `
                 <div class="downloads-now" style="margin-top:1rem;">
@@ -4116,9 +4130,6 @@ async function runOrganiseApply() {
                         <div class="downloads-now-title">Nothing to change</div>
                         <div class="downloads-now-sub">Library was already organised.</div>
                     </div>
-                </div>
-                <div class="import-url-bar" style="margin-top:1rem;">
-                    <button class="nav-btn" type="button" onclick="runOrganiseScan()">Scan Again</button>
                 </div>`;
         } else {
             if (area) area.innerHTML = `
@@ -4127,9 +4138,6 @@ async function runOrganiseApply() {
                     <div class="organise-result-summary">${escapeHtml(summaryParts.join(' · '))}</div>
                     ${plexNote}
                     ${errorBlock}
-                </div>
-                <div class="import-url-bar" style="margin-top:1rem;">
-                    <button class="nav-btn" type="button" onclick="runOrganiseScan()">Scan Again</button>
                 </div>`;
         }
     } catch (e) {

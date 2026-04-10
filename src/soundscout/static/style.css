@@ -5203,6 +5203,34 @@ body.view-scout .results-container {
   color: #ffc947;
 }
 
+/* Description bullet list */
+.organise-desc-list {
+  margin: .6rem 0 0 1.1rem;
+  padding: 0;
+  font-size: .88rem;
+  line-height: 1.6;
+  color: var(--text-secondary, #a0b4c8);
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+}
+
+.organise-desc-list code {
+  background: rgba(255,255,255,.07);
+  border-radius: 3px;
+  padding: 0 .3em;
+  font-size: .85em;
+  color: var(--text-primary, #EAF2FF);
+}
+
+/* Action bar (Scan + Apply side by side) */
+.organise-action-bar {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-top: 1rem;
+}
+
 .organise-summary {
   margin: 1rem 0 .5rem;
   font-size: .95rem;
