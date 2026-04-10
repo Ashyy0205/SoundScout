@@ -43,7 +43,22 @@ _webui_secret = (os.environ.get("WEBUI_SECRET_KEY") or os.environ.get("SECRET_KE
 if not _webui_secret:
     # Persist the key to the config directory so sessions survive server restarts.
     # A new random key is only generated once; subsequent starts reuse the same key.
-    _secret_key_path = _webui_data_dir() / "secret_key"
+    # Inline the config-dir resolution here because _webui_data_dir() is defined later.
+    def _resolve_config_dir_early() -> Path:
+        _env = (os.environ.get("WEBUI_DATA_DIR") or "").strip()
+        if _env:
+            p = Path(_env)
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        _docker = Path("/config")
+        if _docker.exists():
+            return _docker
+        _local = Path.cwd() / "config"
+        _local.mkdir(parents=True, exist_ok=True)
+        return _local
+
+    _secret_key_path = _resolve_config_dir_early() / "secret_key"
+    del _resolve_config_dir_early  # clean up — the real _webui_data_dir() is defined below
     try:
         if _secret_key_path.exists():
             _webui_secret = _secret_key_path.read_text(encoding="utf-8").strip()
