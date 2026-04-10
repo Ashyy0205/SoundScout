@@ -88,8 +88,16 @@ class ScanResult:
 
 
 def _strip_year_suffix(name: str) -> str:
-    """Remove a trailing ``(YYYY)`` year suffix from an album folder name."""
-    return _YEAR_SUFFIX_RE.sub("", name).strip()
+    """Remove a trailing year annotation from an album folder name.
+
+    Returns the original *name* unchanged if stripping would leave a trailing
+    dot — Windows silently mangles folder names ending with ``.`` into 8.3
+    short names, so such folders cannot be safely renamed.
+    """
+    result = _YEAR_SUFFIX_RE.sub("", name).strip()
+    if result.endswith("."):
+        return name
+    return result
 
 
 def _is_audio(path: Path) -> bool:
