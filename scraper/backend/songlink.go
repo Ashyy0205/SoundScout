@@ -469,12 +469,40 @@ type AllPlatformURLs struct {
 	DeezerISRC string // fetched via Deezer public API — enables Qobuz downloads
 }
 
-// GetAllPlatformURLs resolves every available streaming platform URL for a Spotify track ID
-// using a *single* song.link API call and returns them together in AllPlatformURLs.
-// It then makes a supplementary (non-rate-limited) Deezer public API call to retrieve the ISRC
-// required for Qobuz. This eliminates the 2–3 redundant song.link calls that were previously
-// made by each individual service downloader.
+// GetAllPlatformURLs resolves every available streaming platform URL for a Spotify track ID.
+//
+// Fast path (no rate limiting): ISRC → Songstats.  The ISRC is obtained via BoltDB cache
+// (instant on repeat runs) or the Spotify spclient GID metadata endpoint, then Songstats
+// is scraped for Tidal + Amazon + Deezer URLs.  This path adds zero per-track wait time.
+//
+// Slow path (fallback): song.link API with the existing 6 s rate-limiting gate, used only
+// if the fast path fails to find Tidal or Amazon URLs.
 func (s *SongLinkClient) GetAllPlatformURLs(spotifyTrackID string) (*AllPlatformURLs, error) {
+	// ── Fast path: ISRC → Songstats ──────────────────────────────────────────────────────
+	isrc, isrcErr := s.lookupSpotifyISRC(spotifyTrackID)
+	if isrcErr == nil && isrc != "" {
+		links := &resolvedTrackLinks{ISRC: isrc}
+		if err := s.populateLinksFromSongstats(links, isrc); err == nil &&
+			(links.TidalURL != "" || links.AmazonURL != "") {
+			result := &AllPlatformURLs{
+				TidalURL:   links.TidalURL,
+				AmazonURL:  links.AmazonURL,
+				DeezerURL:  links.DeezerURL,
+				DeezerISRC: isrc, // ISRC already in hand — no extra Deezer API call
+			}
+			fmt.Fprintf(os.Stderr, "  Resolved via Songstats (ISRC %s)\n", isrc)
+			recordProviderSuccess("songstats", "songstats")
+			return result, nil
+		}
+		recordProviderFailure("songstats", "songstats")
+		if isrcErr == nil {
+			fmt.Fprintf(os.Stderr, "  Songstats found no Tidal/Amazon URLs, falling through to song.link\n")
+		}
+	} else if isrcErr != nil {
+		fmt.Fprintf(os.Stderr, "  ISRC lookup failed (%v), falling through to song.link\n", isrcErr)
+	}
+
+	// ── Slow path: song.link (rate-limited, ~6 s between calls) ─────────────────────────
 	// --- Shared rate limiting (same thresholds as the other methods) ---
 	now := time.Now()
 	if now.Sub(s.apiCallResetTime) >= time.Minute {
