@@ -394,7 +394,13 @@ func (t *TidalDownloader) GetDownloadURL(trackID int64, quality string) (string,
 	url := fmt.Sprintf("%s/track/?id=%d&quality=%s", t.apiURL, trackID, quality)
 	fmt.Fprintf(os.Stderr, "Tidal API URL: %s\n", url)
 
-	resp, err := t.client.Get(url)
+	req, err := NewRequestWithDefaultHeaders(http.MethodGet, url, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "✗ failed to create request: %v\n", err)
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := t.client.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "✗ Tidal API request failed: %v\n", err)
 		return "", fmt.Errorf("failed to get download URL: %w", err)
@@ -470,7 +476,12 @@ func (t *TidalDownloader) DownloadFile(url, filepath string) error {
 		return t.DownloadFromManifest(strings.TrimPrefix(url, "MANIFEST:"), filepath)
 	}
 
-	resp, err := t.client.Get(url)
+	req, err := NewRequestWithDefaultHeaders(http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := t.client.Do(req)
 
 	if err != nil {
 		return fmt.Errorf("failed to download file: %w", err)
