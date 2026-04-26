@@ -686,7 +686,11 @@ func (a *App) DownloadSongsFromCSV(csvPath string, outputDir string) ([]Download
 
 			// Emit structured progress line for real-time tracking by the Python orchestrator.
 			if succeeded {
-				fmt.Printf("[TRACK_OK] %s || %s\n", rt.artist, rt.title)
+				if lastResp.AlreadyExists {
+					fmt.Printf("[TRACK_OK_EXISTS] %s || %s\n", rt.artist, rt.title)
+				} else {
+					fmt.Printf("[TRACK_OK] %s || %s\n", rt.artist, rt.title)
+				}
 			} else {
 				// Truncate error to first line, max 120 chars, to avoid HTML blobs in structured output.
 				errMsg := lastResp.Error

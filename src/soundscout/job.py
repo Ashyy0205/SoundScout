@@ -19,7 +19,10 @@ logger = logging.getLogger(__name__)
 def _norm_text(value: str) -> str:
     s = (value or "").lower()
     s = s.replace("&", " and ")
-    s = re.sub(r"[^a-z0-9]+", " ", s)
+    # Keep unicode word characters (letters + digits in any script, including CJK).
+    # Only strip actual punctuation/symbols so Japanese/Korean/Chinese track names
+    # survive normalization and produce non-empty keys.
+    s = re.sub(r"[^\w]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 

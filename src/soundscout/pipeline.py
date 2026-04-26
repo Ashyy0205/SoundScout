@@ -144,10 +144,11 @@ def _run_acquire_command(*, report_path: Path) -> bool:
     env["REPORT_PATH"] = str(report_path)
 
     logger.info("Running acquisition command")
-    _OK_RE   = _re.compile(r'^\[TRACK_OK\] (.+?) \|\| (.+?)$')
-    _FAIL_RE = _re.compile(r'^\[TRACK_FAIL\] (.+?) \|\| (.+?) \|\| (.*)$')
-    _RES_RE  = _re.compile(r'^\[(\d+)/(\d+)\] Resolving platforms: (.+?) - (.+?)$')
-    _DL_RE   = _re.compile(r'^\[(\d+)/(\d+)\] Downloading: (.+?) - (.+?)$')
+    _OK_RE    = _re.compile(r'^\[TRACK_OK\] (.+?) \|\| (.+?)$')
+    _EXIST_RE = _re.compile(r'^\[TRACK_OK_EXISTS\] (.+?) \|\| (.+?)$')
+    _FAIL_RE  = _re.compile(r'^\[TRACK_FAIL\] (.+?) \|\| (.+?) \|\| (.*)$')
+    _RES_RE   = _re.compile(r'^\[(\d+)/(\d+)\] Resolving platforms: (.+?) - (.+?)$')
+    _DL_RE    = _re.compile(r'^\[(\d+)/(\d+)\] Downloading: (.+?) - (.+?)$')
 
     proc = subprocess.Popen(
         acquire_cmd,
@@ -168,18 +169,23 @@ def _run_acquire_command(*, report_path: Path) -> bool:
     stderr_thread.start()
 
     ok_count = 0
+    exists_count = 0
     fail_count = 0
     for raw in (proc.stdout or []):
         line = raw.rstrip()
         if not line:
             continue
-        m_ok   = _OK_RE.match(line)
-        m_fail = _FAIL_RE.match(line)
-        m_res  = _RES_RE.match(line)
-        m_dl   = _DL_RE.match(line)
+        m_ok    = _OK_RE.match(line)
+        m_exist = _EXIST_RE.match(line)
+        m_fail  = _FAIL_RE.match(line)
+        m_res   = _RES_RE.match(line)
+        m_dl    = _DL_RE.match(line)
         if m_ok:
             ok_count += 1
             logger.info("  \u2713 %s \u2013 %s", m_ok.group(1), m_ok.group(2))
+        elif m_exist:
+            exists_count += 1
+            logger.info("  \u2713 %s \u2013 %s [already on disk]", m_exist.group(1), m_exist.group(2))
         elif m_fail:
             fail_count += 1
             logger.warning("  \u2717 %s \u2013 %s: %s", m_fail.group(1), m_fail.group(2), m_fail.group(3))
@@ -189,11 +195,14 @@ def _run_acquire_command(*, report_path: Path) -> bool:
             logger.debug("  [%s/%s] Downloading: %s \u2013 %s", m_dl.group(1), m_dl.group(2), m_dl.group(3), m_dl.group(4))
     proc.wait()
     stderr_thread.join()
-    if ok_count + fail_count > 0:
-        logger.info("Acquisition complete: %d downloaded, %d failed", ok_count, fail_count)
+    if ok_count + exists_count + fail_count > 0:
+        logger.info(
+            "Acquisition complete: %d downloaded, %d already on disk, %d failed",
+            ok_count, exists_count, fail_count,
+        )
     if proc.returncode != 0:
         raise RuntimeError(f"Acquisition command failed with exit code {proc.returncode}")
-    return ok_count
+    return ok_count + exists_count
 
 
 def _default_report_path() -> Path:

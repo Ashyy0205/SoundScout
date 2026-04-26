@@ -376,6 +376,7 @@ class PlexClient:
         Strategy:
         - search for tracks by title (track-only)
         - search for tracks by artist + title
+        - artist-name search (useful when Plex doesn't full-text-index non-ASCII titles)
         - SEARCH BY ARTIST + Recency Fallback (for language mismatches)
         - score candidates using normalized title/artist
         """
@@ -400,7 +401,23 @@ class PlexClient:
             except Exception:
                 pass
         
-        # 3. Fallback: Search by Artist and look for RECENTLY ADDED tracks
+        # 3. Artist-only search — important for non-ASCII (CJK) titles where Plex's
+        # full-text index may not return results for the title string, but the artist
+        # folder is often ASCII and reliably indexed.  We collect all tracks by that
+        # artist and let the scorer sort them out.
+        if not candidates:
+            try:
+                artist_results = self.music_section.search(title=wanted_artist, libtype="artist")
+                if artist_results:
+                    for art in artist_results[:3]:
+                        try:
+                            candidates.extend(art.tracks())
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        # 4. Fallback: Search by Artist and look for RECENTLY ADDED tracks
         # This handles the case where we just downloaded "Sky Restaurant" but we are looking for "スカイレストラン"
         # If we find a track by "Hi-Fi Set" added in the last 24 hours, it's probably the one.
         try:
@@ -408,22 +425,12 @@ class PlexClient:
             # "check the 30 most recently added song for the same artist name"
             artist_candidates = self.music_section.search(title=wanted_artist, libtype="artist")
             
-            # If nothing found, try simpler normalization approach for artist name lookup?
-            # Plex search is usually good, but let's just stick to what we found.
-            
             if artist_candidates:
                 # We take the first artist match
                 artist = artist_candidates[0]
                 
                 # We want recently added tracks from this artist.
-                # Just asking for tracks() might return them in album order or release date order.
-                # We explicitly request sort="addedAt:desc" to get the newest ones.
                 recent_tracks = artist.tracks(sort="addedAt:desc", limit=50)
-                
-                # Check timestamps on these tracks. 
-                # (Ideally we just grab them if they are recent enough, regardless of title match? 
-                #  User says "match it like that". We'll add them to candidates and let scoring sort it out,
-                #  but the scoring needs to be aware that we *expect* title mismatch).
                 
                 import datetime
                 yesterday = datetime.datetime.now() - datetime.timedelta(days=1)
@@ -433,11 +440,9 @@ class PlexClient:
                          candidates.append(t)
             
             # OPTION B: Search RECENTLY ADDED globally (if Option A failed or invalid artist match)
-            # This catches cases where Plex hasn't fully indexed the Artist string yet but the track is there.
             if not candidates:
                  recently_added = self.music_section.recentlyAdded(maxResults=50, libtype='track')
                  for t in recently_added:
-                     # Check if fuzzy artist matches
                      t_artist = self._norm(getattr(t, "grandparentTitle", "") or "")
                      w_artist = self._norm(wanted_artist)
                      if w_artist and t_artist and (w_artist in t_artist or t_artist in w_artist):
@@ -458,6 +463,13 @@ class PlexClient:
                  unique_candidates.append(x)
                  seen_keys.add(x.ratingKey)
 
+        # Check whether the wanted title is entirely non-ASCII (CJK etc.).
+        # For such titles Plex often returns candidates only via the artist-only search,
+        # so we accept a lower score threshold (artist match alone is enough).
+        import unicodedata as _ud
+        _ascii_chars = sum(1 for c in wanted_title if c.isascii() and c.isalpha())
+        title_is_non_ascii = (_ascii_chars == 0 and len(wanted_title) > 0)
+
         for item in unique_candidates:
             if getattr(item, "type", None) != "track":
                 continue
@@ -469,22 +481,23 @@ class PlexClient:
             import datetime
             yesterday = datetime.datetime.now() - datetime.timedelta(days=1)
             
-            # Check Artist Match specifically for the boost
             item_artist = self._norm(getattr(item, "grandparentTitle", "") or "")
             wanted_artist_norm = self._norm(wanted_artist)
             
             artist_match = (wanted_artist_norm and item_artist) and (wanted_artist_norm in item_artist or item_artist in wanted_artist_norm)
             
             if artist_match and item.addedAt and item.addedAt > yesterday:
-                # It's by the right artist and we just added it. 99% chance it's our file.
                 score += 10
 
             if score > best_score:
                 best_score = score
                 best_item = item
 
-        # Lower threshold to 3 normally, but simple artist+recency boost takes it to 10+
-        if best_score >= 3:
+        # For ASCII titles: require a combined artist+title signal (score ≥ 3).
+        # For non-ASCII titles: a solid artist match alone (score ≥ 2) is enough,
+        # because Plex's full-text index is unreliable for CJK strings.
+        threshold = 2 if title_is_non_ascii else 3
+        if best_score >= threshold:
             return best_item
 
         return None
