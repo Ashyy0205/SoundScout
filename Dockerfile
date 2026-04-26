@@ -1,5 +1,5 @@
 # --- Stage 1: Build scraper ---
-FROM golang:1.25-bookworm AS builder
+FROM golang:1.26-bookworm AS builder
 
 WORKDIR /build
 

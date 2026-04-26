@@ -2,6 +2,9 @@ package backend
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -12,9 +15,11 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,6 +29,230 @@ type AmazonDownloader struct {
 	lastAPICallTime  time.Time
 	apiCallCount     int
 	apiCallResetTime time.Time
+}
+
+type AmazonStreamResponse struct {
+	StreamURL     string `json:"streamUrl"`
+	DecryptionKey string `json:"decryptionKey"`
+}
+
+const amazonMusicAPIBaseURL = "https://amazon.spotbye.qzz.io"
+
+var (
+	amazonMusicDebugKeyOnce sync.Once
+	amazonMusicDebugKey     string
+	amazonMusicDebugKeyErr  error
+)
+
+var amazonMusicDebugKeySeedParts = [][]byte{
+	[]byte("spotif"),
+	[]byte("lac:am"),
+	[]byte("azon:spotbye:api:v1"),
+}
+
+var amazonMusicDebugKeyAAD = []byte{
+	0x61, 0x6d, 0x61, 0x7a, 0x6f, 0x6e, 0x7c, 0x73, 0x70, 0x6f, 0x74, 0x62,
+	0x79, 0x65, 0x7c, 0x64, 0x65, 0x62, 0x75, 0x67, 0x7c, 0x76, 0x31,
+}
+
+var amazonMusicDebugKeyNonce = []byte{
+	0x52, 0x1f, 0xa4, 0x9c, 0x13, 0x77, 0x5b, 0xe2, 0x81, 0x44, 0x90, 0x6d,
+}
+
+var amazonMusicDebugKeyCiphertext = []byte{
+	0x5b, 0xf9, 0xc1, 0x2e, 0x58, 0xf8, 0x5b, 0xc0, 0x04, 0x68, 0x7e, 0xff,
+	0x3d, 0xd6, 0x8b, 0xe3, 0x86, 0x49, 0x6c, 0xfd, 0xc1, 0x49, 0x0b, 0xfb,
+}
+
+var amazonMusicDebugKeyTag = []byte{
+	0x6c, 0x21, 0x98, 0x51, 0xf2, 0x38, 0x4b, 0x4a, 0x23, 0xe1, 0xc6, 0xd7,
+	0x65, 0x7f, 0xfb, 0xa1,
+}
+
+func getAmazonMusicDebugKey() (string, error) {
+	amazonMusicDebugKeyOnce.Do(func() {
+		hasher := sha256.New()
+		for _, part := range amazonMusicDebugKeySeedParts {
+			hasher.Write(part)
+		}
+
+		block, err := aes.NewCipher(hasher.Sum(nil))
+		if err != nil {
+			amazonMusicDebugKeyErr = err
+			return
+		}
+
+		gcm, err := cipher.NewGCM(block)
+		if err != nil {
+			amazonMusicDebugKeyErr = err
+			return
+		}
+
+		sealed := make([]byte, 0, len(amazonMusicDebugKeyCiphertext)+len(amazonMusicDebugKeyTag))
+		sealed = append(sealed, amazonMusicDebugKeyCiphertext...)
+		sealed = append(sealed, amazonMusicDebugKeyTag...)
+
+		plaintext, err := gcm.Open(nil, amazonMusicDebugKeyNonce, sealed, amazonMusicDebugKeyAAD)
+		if err != nil {
+			amazonMusicDebugKeyErr = err
+			return
+		}
+
+		amazonMusicDebugKey = string(plaintext)
+	})
+
+	if amazonMusicDebugKeyErr != nil {
+		return "", amazonMusicDebugKeyErr
+	}
+	return amazonMusicDebugKey, nil
+}
+
+func (a *AmazonDownloader) DownloadFromAfkarXYZ(amazonURL, outputDir, quality string) (string, error) {
+	asinRegex := regexp.MustCompile(`(B[0-9A-Z]{9})`)
+	asin := asinRegex.FindString(amazonURL)
+	if asin == "" {
+		return "", fmt.Errorf("failed to extract ASIN from URL: %s", amazonURL)
+	}
+
+	apiURL := fmt.Sprintf("%s/api/track/%s", amazonMusicAPIBaseURL, asin)
+	req, err := NewRequestWithDefaultHeaders(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	debugKey, err := getAmazonMusicDebugKey()
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt Amazon debug key: %w", err)
+	}
+	req.Header.Set("X-Debug-Key", debugKey)
+
+	fmt.Fprintf(os.Stderr, "Fetching from Amazon API (ASIN: %s)...\n", asin)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("Amazon API returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(preview)))
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var apiResp AmazonStreamResponse
+	if err := json.Unmarshal(bodyBytes, &apiResp); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if apiResp.StreamURL == "" {
+		return "", fmt.Errorf("no stream URL found in response")
+	}
+
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return "", err
+	}
+
+	fileName := fmt.Sprintf("%s.m4a", asin)
+	filePath := filepath.Join(outputDir, fileName)
+
+	out, err := os.Create(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer out.Close()
+
+	dlReq, err := NewRequestWithDefaultHeaders(http.MethodGet, apiResp.StreamURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	dlResp, err := a.client.Do(dlReq)
+	if err != nil {
+		return "", err
+	}
+	defer dlResp.Body.Close()
+
+	fmt.Fprintf(os.Stderr, "Downloading track: %s\n", fileName)
+	pw := NewProgressWriter(out)
+	_, err = io.Copy(pw, dlResp.Body)
+	if err != nil {
+		out.Close()
+		os.Remove(filePath)
+		return "", err
+	}
+	fmt.Fprintf(os.Stderr, "\rDownloaded: %.2f MB (Complete)\n", float64(pw.GetTotal())/(1024*1024))
+
+	if apiResp.DecryptionKey != "" {
+		fmt.Fprintln(os.Stderr, "Decrypting file...")
+
+		ffprobePath, probeErr := GetFFprobePath()
+		var codec string
+		if probeErr == nil {
+			cmdProbe := exec.Command(ffprobePath,
+				"-v", "quiet",
+				"-select_streams", "a:0",
+				"-show_entries", "stream=codec_name",
+				"-of", "default=noprint_wrappers=1:nokey=1",
+				filePath,
+			)
+			setHideWindow(cmdProbe)
+			codecOutput, _ := cmdProbe.Output()
+			codec = strings.TrimSpace(string(codecOutput))
+			fmt.Fprintf(os.Stderr, "Detected codec: %s\n", codec)
+		}
+
+		targetExt := ".m4a"
+		if codec == "flac" {
+			targetExt = ".flac"
+		}
+
+		base := strings.TrimSuffix(fileName, ".m4a")
+		decryptedFilename := "dec_" + base + targetExt
+		decryptedPath := filepath.Join(outputDir, decryptedFilename)
+
+		ffmpegPath, err := GetFFmpegPath()
+		if err != nil {
+			return "", fmt.Errorf("ffmpeg not found for decryption: %w", err)
+		}
+		if err := ValidateExecutable(ffmpegPath); err != nil {
+			return "", fmt.Errorf("invalid ffmpeg executable: %w", err)
+		}
+
+		cmd := exec.Command(ffmpegPath,
+			"-decryption_key", strings.TrimSpace(apiResp.DecryptionKey),
+			"-i", filePath,
+			"-c", "copy",
+			"-y",
+			decryptedPath,
+		)
+		setHideWindow(cmd)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			outStr := string(out)
+			if len(outStr) > 500 {
+				outStr = outStr[len(outStr)-500:]
+			}
+			return "", fmt.Errorf("ffmpeg decryption failed: %v\nTail: %s", err, outStr)
+		}
+
+		if info, statErr := os.Stat(decryptedPath); statErr != nil || info.Size() == 0 {
+			return "", fmt.Errorf("decrypted file missing or empty")
+		}
+
+		os.Remove(filePath)
+
+		finalPath := filepath.Join(outputDir, base+targetExt)
+		if err := os.Rename(decryptedPath, finalPath); err != nil {
+			return "", fmt.Errorf("failed to rename decrypted file: %w", err)
+		}
+		filePath = finalPath
+		fmt.Fprintln(os.Stderr, "Decryption successful")
+	}
+
+	return filePath, nil
 }
 
 type SongLinkResponse struct {
@@ -387,8 +616,15 @@ func (a *AmazonDownloader) DownloadFromLucida(amazonURL, outputDir, quality stri
 }
 
 func (a *AmazonDownloader) DownloadFromService(amazonURL, outputDir, quality string) (string, error) {
-	fmt.Fprintln(os.Stderr, "Attempting download via Lucida (Priority)...")
-	filePath, err := a.DownloadFromLucida(amazonURL, outputDir, quality)
+	// Try the AfkarXYZ API (amazon.spotbye.qzz.io) first — most reliable.
+	fmt.Fprintln(os.Stderr, "Attempting download via AfkarXYZ (Priority)...")
+	filePath, err := a.DownloadFromAfkarXYZ(amazonURL, outputDir, quality)
+	if err == nil {
+		return filePath, nil
+	}
+	fmt.Fprintf(os.Stderr, "AfkarXYZ failed: %v\nTrying Lucida as fallback...\n", err)
+
+	filePath, err = a.DownloadFromLucida(amazonURL, outputDir, quality)
 	if err == nil {
 		return filePath, nil
 	}

@@ -1,6 +1,10 @@
 package backend
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -69,6 +74,158 @@ type QobuzStreamResponse struct {
 	URL string `json:"url"`
 }
 
+type qobuzMusicDLRequest struct {
+	URL     string `json:"url"`
+	Quality string `json:"quality"`
+}
+
+type qobuzMusicDLResponse struct {
+	Success     bool   `json:"success"`
+	URLType     string `json:"url_type"`
+	DownloadURL string `json:"download_url"`
+	Message     string `json:"message"`
+	Error       string `json:"error"`
+}
+
+const qobuzMusicDLAPIURL = "https://www.musicdl.me/api/qobuz/download"
+
+var (
+	qobuzMusicDLDebugKeyOnce sync.Once
+	qobuzMusicDLDebugKey     string
+	qobuzMusicDLDebugKeyErr  error
+)
+
+var qobuzMusicDLDebugKeySeedParts = [][]byte{
+	{0x73, 0x70, 0x6f, 0x74, 0x69, 0x66},
+	{0x6c, 0x61, 0x63, 0x3a, 0x71, 0x6f},
+	{0x62, 0x75, 0x7a, 0x3a, 0x6d, 0x75, 0x73, 0x69, 0x63, 0x64, 0x6c, 0x3a, 0x76, 0x31},
+}
+
+var qobuzMusicDLDebugKeyAAD = []byte{
+	0x71, 0x6f, 0x62, 0x75, 0x7a, 0x7c, 0x6d, 0x75, 0x73, 0x69, 0x63, 0x64,
+	0x6c, 0x7c, 0x64, 0x65, 0x62, 0x75, 0x67, 0x7c, 0x76, 0x31,
+}
+
+var qobuzMusicDLDebugKeyNonce = []byte{
+	0x91, 0x2a, 0x5c, 0x77, 0x0f, 0x33, 0xa8, 0x14, 0x62, 0x9d, 0xce, 0x41,
+}
+
+var qobuzMusicDLDebugKeyCiphertext = []byte{
+	0xf3, 0x4a, 0x83, 0x45, 0x24, 0xb6, 0x22, 0xaf, 0xd6, 0xc3, 0x6e, 0x2d,
+	0x56, 0xd1, 0xbb, 0x0b, 0xe9, 0x1b, 0x4f, 0x1c, 0x5f, 0x41, 0x55, 0xc2,
+	0xc6, 0xdf, 0xad, 0x21, 0x58, 0xfe, 0xd5, 0xb8, 0x2d, 0x29, 0xf9, 0x9e,
+	0x6f, 0xd6,
+}
+
+var qobuzMusicDLDebugKeyTag = []byte{
+	0x69, 0x0c, 0x42, 0x70, 0x14, 0x83, 0xff, 0x14, 0xc8, 0xbe, 0x17, 0x00,
+	0x69, 0xb1, 0xfe, 0xbb,
+}
+
+func getQobuzMusicDLDebugKey() (string, error) {
+	qobuzMusicDLDebugKeyOnce.Do(func() {
+		hasher := sha256.New()
+		for _, part := range qobuzMusicDLDebugKeySeedParts {
+			hasher.Write(part)
+		}
+
+		block, err := aes.NewCipher(hasher.Sum(nil))
+		if err != nil {
+			qobuzMusicDLDebugKeyErr = err
+			return
+		}
+
+		gcm, err := cipher.NewGCM(block)
+		if err != nil {
+			qobuzMusicDLDebugKeyErr = err
+			return
+		}
+
+		sealed := make([]byte, 0, len(qobuzMusicDLDebugKeyCiphertext)+len(qobuzMusicDLDebugKeyTag))
+		sealed = append(sealed, qobuzMusicDLDebugKeyCiphertext...)
+		sealed = append(sealed, qobuzMusicDLDebugKeyTag...)
+
+		plaintext, err := gcm.Open(nil, qobuzMusicDLDebugKeyNonce, sealed, qobuzMusicDLDebugKeyAAD)
+		if err != nil {
+			qobuzMusicDLDebugKeyErr = err
+			return
+		}
+
+		qobuzMusicDLDebugKey = string(plaintext)
+	})
+
+	if qobuzMusicDLDebugKeyErr != nil {
+		return "", qobuzMusicDLDebugKeyErr
+	}
+	return qobuzMusicDLDebugKey, nil
+}
+
+func (q *QobuzDownloader) DownloadFromMusicDL(trackID int64, quality string) (string, error) {
+	if strings.TrimSpace(quality) == "" {
+		quality = "6"
+	}
+
+	debugKey, err := getQobuzMusicDLDebugKey()
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt MusicDL debug key: %w", err)
+	}
+
+	trackURL := fmt.Sprintf("https://open.qobuz.com/track/%d", trackID)
+	payload, err := json.Marshal(qobuzMusicDLRequest{URL: trackURL, Quality: quality})
+	if err != nil {
+		return "", fmt.Errorf("failed to encode MusicDL request: %w", err)
+	}
+
+	req, err := NewRequestWithDefaultHeaders(http.MethodPost, qobuzMusicDLAPIURL, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("failed to create MusicDL request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Debug-Key", debugKey)
+
+	resp, err := q.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to reach MusicDL: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read MusicDL response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		preview := strings.TrimSpace(string(body))
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		return "", fmt.Errorf("MusicDL returned status %d: %s", resp.StatusCode, preview)
+	}
+
+	var dlResp qobuzMusicDLResponse
+	if err := json.Unmarshal(body, &dlResp); err != nil {
+		return "", fmt.Errorf("failed to decode MusicDL response: %w", err)
+	}
+
+	if !dlResp.Success {
+		msg := strings.TrimSpace(dlResp.Error)
+		if msg == "" {
+			msg = strings.TrimSpace(dlResp.Message)
+		}
+		if msg == "" {
+			msg = "MusicDL reported failure"
+		}
+		return "", fmt.Errorf("%s", msg)
+	}
+
+	downloadURL := strings.TrimSpace(dlResp.DownloadURL)
+	if downloadURL == "" {
+		return "", fmt.Errorf("MusicDL response did not include a download_url")
+	}
+
+	return downloadURL, nil
+}
+
 func extractQobuzDownloadURL(body []byte) (string, error) {
 	bodyStr := strings.TrimSpace(string(body))
 	if bodyStr == "" {
@@ -121,24 +278,22 @@ func NewQobuzDownloader() *QobuzDownloader {
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 		},
-		appID: "798273057",
+		appID: qobuzDefaultAPIAppID,
 	}
 }
 
 // SearchByText searches Qobuz by artist + title and returns the best matching track.
-// This requires no ISRC and no song.link call.
 func (q *QobuzDownloader) SearchByText(artist, title string) (*QobuzTrack, error) {
-	apiBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly93d3cucW9idXouY29tL2FwaS5qc29uLzAuMi90cmFjay9zZWFyY2g/cXVlcnk9")
-	query := url.QueryEscape(artist + " " + title)
-	searchURL := fmt.Sprintf("%s%s&limit=5&app_id=%s", string(apiBase), query, q.appID)
-
-	resp, err := q.client.Get(searchURL)
+	resp, err := doQobuzSignedRequest(http.MethodGet, "track/search", url.Values{
+		"query": {artist + " " + title},
+		"limit": {"5"},
+	}, q.client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search track: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
 	}
 
@@ -165,10 +320,10 @@ func (q *QobuzDownloader) SearchByText(artist, title string) (*QobuzTrack, error
 
 func (q *QobuzDownloader) SearchByISRC(isrc string) (*QobuzTrack, error) {
 
-	apiBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly93d3cucW9idXouY29tL2FwaS5qc29uLzAuMi90cmFjay9zZWFyY2g/cXVlcnk9")
-	url := fmt.Sprintf("%s%s&limit=1&app_id=%s", string(apiBase), isrc, q.appID)
-
-	resp, err := q.client.Get(url)
+	resp, err := doQobuzSignedRequest(http.MethodGet, "track/search", url.Values{
+		"query": {isrc},
+		"limit": {"1"},
+	}, q.client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search track: %w", err)
 	}
@@ -213,8 +368,15 @@ func (q *QobuzDownloader) GetDownloadURL(trackID int64, quality string) (string,
 	}
 
 	fmt.Fprintf(os.Stderr, "Getting download URL for track ID: %d with requested quality: %s\n", trackID, qualityCode)
-	fmt.Fprintf(os.Stderr, "Quality codes: 6=FLAC 16-bit, 7=FLAC 24-bit\n")
 
+	// MusicDL is the most reliable provider — try it first.
+	fmt.Fprintln(os.Stderr, "Trying MusicDL provider...")
+	if musicDLURL, err := q.DownloadFromMusicDL(trackID, qualityCode); err == nil {
+		fmt.Fprintln(os.Stderr, "✓ Got download URL from MusicDL")
+		return musicDLURL, nil
+	}
+
+	fmt.Fprintln(os.Stderr, "MusicDL failed, trying standard APIs...")
 	primaryBase, _ := base64.StdEncoding.DecodeString("aHR0cHM6Ly9kYWIueWVldC5zdS9hcGkvc3RyZWFtP3RyYWNrSWQ9")
 
 	primaryURL := fmt.Sprintf("%s%d&quality=%s", string(primaryBase), trackID, qualityCode)

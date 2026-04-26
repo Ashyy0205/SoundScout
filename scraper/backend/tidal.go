@@ -128,7 +128,13 @@ func NewTidalDownloader(apiURL string) *TidalDownloader {
 }
 
 func (t *TidalDownloader) GetAvailableAPIs() ([]string, error) {
+	// Try the live gist-based API list first.
+	if liveAPIs, err := GetRotatedTidalAPIList(); err == nil && len(liveAPIs) > 0 {
+		return liveAPIs, nil
+	}
 
+	// Refresh from gist in the background won't help here, so fall back to the
+	// hardcoded list so we always have something to try.
 	encodedAPIs := []string{
 		"dm9nZWwucXFkbC5zaXRl",
 		"bWF1cy5xcWRsLnNpdGU=",
@@ -511,7 +517,7 @@ func (t *TidalDownloader) DownloadFile(url, filepath string) error {
 }
 
 func (t *TidalDownloader) DownloadFromManifest(manifestB64, outputPath string) error {
-	directURL, initURL, mediaURLs, err := parseManifest(manifestB64)
+	directURL, initURL, mediaURLs, mimeType, err := parseManifest(manifestB64)
 	if err != nil {
 		return fmt.Errorf("failed to parse manifest: %w", err)
 	}
@@ -521,7 +527,16 @@ func (t *TidalDownloader) DownloadFromManifest(manifestB64, outputPath string) e
 	}
 
 	if directURL != "" {
-		fmt.Fprintln(os.Stderr, "Downloading file...")
+		isAAC := strings.Contains(strings.ToLower(mimeType), "mp4") || strings.Contains(strings.ToLower(mimeType), "aac")
+
+		var downloadTarget string
+		if isAAC {
+			downloadTarget = outputPath + ".m4a.tmp"
+			fmt.Fprintf(os.Stderr, "Downloading BTS file (AAC, will convert to FLAC)...\n")
+		} else {
+			downloadTarget = outputPath
+			fmt.Fprintln(os.Stderr, "Downloading file...")
+		}
 
 		resp, err := client.Get(directURL)
 		if err != nil {
@@ -533,19 +548,44 @@ func (t *TidalDownloader) DownloadFromManifest(manifestB64, outputPath string) e
 			return fmt.Errorf("download failed with status %d", resp.StatusCode)
 		}
 
-		out, err := os.Create(outputPath)
+		out, err := os.Create(downloadTarget)
 		if err != nil {
 			return fmt.Errorf("failed to create file: %w", err)
 		}
-		defer out.Close()
 
 		pw := NewProgressWriter(out)
-		_, err = io.Copy(pw, resp.Body)
-		if err != nil {
-			return fmt.Errorf("failed to write file: %w", err)
+		_, copyErr := io.Copy(pw, resp.Body)
+		out.Close()
+		if copyErr != nil {
+			os.Remove(downloadTarget)
+			return fmt.Errorf("failed to write file: %w", copyErr)
 		}
 
 		fmt.Fprintf(os.Stderr, "\rDownloaded: %.2f MB (Complete)\n", float64(pw.GetTotal())/(1024*1024))
+
+		if isAAC {
+			fmt.Fprintln(os.Stderr, "Converting AAC to FLAC...")
+			ffmpegPath, err := GetFFmpegPath()
+			if err != nil {
+				os.Remove(downloadTarget)
+				return fmt.Errorf("ffmpeg not found: %w", err)
+			}
+			if err := ValidateExecutable(ffmpegPath); err != nil {
+				os.Remove(downloadTarget)
+				return fmt.Errorf("invalid ffmpeg executable: %w", err)
+			}
+			cmd := exec.Command(ffmpegPath, "-y", "-i", downloadTarget, "-vn", "-c:a", "flac", "-map_metadata", "-1", outputPath)
+			setHideWindow(cmd)
+			var stderr strings.Builder
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				m4aPath := strings.TrimSuffix(outputPath, ".flac") + ".m4a"
+				os.Rename(downloadTarget, m4aPath)
+				return fmt.Errorf("ffmpeg conversion failed (M4A saved as %s): %w - %s", m4aPath, err, stderr.String())
+			}
+			os.Remove(downloadTarget)
+		}
+
 		fmt.Fprintln(os.Stderr, "Download complete")
 		return nil
 	}
@@ -909,10 +949,10 @@ type MPD struct {
 	} `xml:"Period"`
 }
 
-func parseManifest(manifestB64 string) (directURL string, initURL string, mediaURLs []string, err error) {
+func parseManifest(manifestB64 string) (directURL string, initURL string, mediaURLs []string, mimeType string, err error) {
 	manifestBytes, err := base64.StdEncoding.DecodeString(manifestB64)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("failed to decode manifest: %w", err)
+		return "", "", nil, "", fmt.Errorf("failed to decode manifest: %w", err)
 	}
 
 	manifestStr := string(manifestBytes)
@@ -920,18 +960,20 @@ func parseManifest(manifestB64 string) (directURL string, initURL string, mediaU
 	if strings.HasPrefix(strings.TrimSpace(manifestStr), "{") {
 		var btsManifest TidalBTSManifest
 		if err := json.Unmarshal(manifestBytes, &btsManifest); err != nil {
-			return "", "", nil, fmt.Errorf("failed to parse BTS manifest: %w", err)
+			return "", "", nil, "", fmt.Errorf("failed to parse BTS manifest: %w", err)
 		}
 
 		if len(btsManifest.URLs) == 0 {
-			return "", "", nil, fmt.Errorf("no URLs in BTS manifest")
+			return "", "", nil, "", fmt.Errorf("no URLs in BTS manifest")
 		}
 
 		fmt.Fprintf(os.Stderr, "Manifest: BTS format (%s, %s)\n", btsManifest.MimeType, btsManifest.Codecs)
-		return btsManifest.URLs[0], "", nil, nil
+		return btsManifest.URLs[0], "", nil, btsManifest.MimeType, nil
 	}
 
 	fmt.Fprintln(os.Stderr, "Manifest: DASH format")
+
+	mimeType = "audio/mp4"
 
 	var mpd MPD
 	var segTemplate *SegmentTemplate
@@ -993,7 +1035,7 @@ func parseManifest(manifestB64 string) (directURL string, initURL string, mediaU
 			mediaURL := strings.ReplaceAll(mediaTemplate, "$Number$", fmt.Sprintf("%d", i))
 			mediaURLs = append(mediaURLs, mediaURL)
 		}
-		return "", initURL, mediaURLs, nil
+		return "", initURL, mediaURLs, mimeType, nil
 	}
 
 	fmt.Fprintln(os.Stderr, "Using regex fallback for DASH manifest...")
@@ -1009,7 +1051,7 @@ func parseManifest(manifestB64 string) (directURL string, initURL string, mediaU
 	}
 
 	if initURL == "" {
-		return "", "", nil, fmt.Errorf("no initialization URL found in manifest")
+		return "", "", nil, "", fmt.Errorf("no initialization URL found in manifest")
 	}
 
 	initURL = strings.ReplaceAll(initURL, "&amp;", "&")
@@ -1030,7 +1072,7 @@ func parseManifest(manifestB64 string) (directURL string, initURL string, mediaU
 	}
 
 	if segmentCount == 0 {
-		return "", "", nil, fmt.Errorf("no segments found in manifest (XML: %d, Regex: 0)", len(matches))
+		return "", "", nil, "", fmt.Errorf("no segments found in manifest (XML: %d, Regex: 0)", len(matches))
 	}
 
 	fmt.Fprintf(os.Stderr, "Parsed manifest via Regex: %d segments\n", segmentCount)
@@ -1040,7 +1082,7 @@ func parseManifest(manifestB64 string) (directURL string, initURL string, mediaU
 		mediaURLs = append(mediaURLs, mediaURL)
 	}
 
-	return "", initURL, mediaURLs, nil
+	return "", initURL, mediaURLs, mimeType, nil
 }
 
 type manifestResult struct {
@@ -1065,7 +1107,12 @@ func getDownloadURLParallel(apis []string, trackID int64, quality string) (strin
 			}
 
 			url := fmt.Sprintf("%s/track/?id=%d&quality=%s", api, trackID, quality)
-			resp, err := client.Get(url)
+			req, err := NewRequestWithDefaultHeaders(http.MethodGet, url, nil)
+			if err != nil {
+				resultChan <- manifestResult{apiURL: api, err: err}
+				return
+			}
+			resp, err := client.Do(req)
 			if err != nil {
 				resultChan <- manifestResult{apiURL: api, err: err}
 				return
@@ -1085,6 +1132,27 @@ func getDownloadURLParallel(apis []string, trackID int64, quality string) (strin
 
 			var v2Response TidalAPIResponseV2
 			if err := json.Unmarshal(body, &v2Response); err == nil && v2Response.Data.Manifest != "" {
+				// Prefer FLAC manifests over AAC — track the mime type so we can
+				// prefer a lossless result when multiple APIs respond successfully.
+				manifestBytes, decErr := base64.StdEncoding.DecodeString(v2Response.Data.Manifest)
+				if decErr == nil {
+					manifestStr := strings.TrimSpace(string(manifestBytes))
+					if strings.HasPrefix(manifestStr, "{") {
+						var bts TidalBTSManifest
+						if json.Unmarshal(manifestBytes, &bts) == nil && bts.MimeType != "" {
+							isActualLossless := strings.Contains(strings.ToLower(bts.MimeType), "flac")
+							if isActualLossless {
+								// Immediately prefer a confirmed FLAC response.
+								resultChan <- manifestResult{apiURL: api, manifest: v2Response.Data.Manifest, err: nil}
+								return
+							}
+							// AAC/lossy — still usable (we'll transcode). Send as
+							// lower-priority by tagging the error with a soft note.
+							resultChan <- manifestResult{apiURL: api, manifest: "LOSSY:" + v2Response.Data.Manifest, err: nil}
+							return
+						}
+					}
+				}
 				resultChan <- manifestResult{apiURL: api, manifest: v2Response.Data.Manifest, err: nil}
 				return
 			}
@@ -1106,18 +1174,27 @@ func getDownloadURLParallel(apis []string, trackID int64, quality string) (strin
 
 	var lastError error
 	var errors []string
+	var lossyFallback *manifestResult // best lossy result, used only if all FLAC fail
 
 	for i := 0; i < len(apis); i++ {
 		result := <-resultChan
 		if result.err == nil && result.manifest != "" {
+			if strings.HasPrefix(result.manifest, "LOSSY:") {
+				// Keep as candidate but keep collecting to see if a FLAC result arrives.
+				if lossyFallback == nil {
+					cp := result
+					lossyFallback = &cp
+				}
+				errors = append(errors, fmt.Sprintf("%s: returned lossy format (AAC)", result.apiURL))
+			} else {
+				fmt.Fprintf(os.Stderr, "✓ Got FLAC response from: %s\n", result.apiURL)
 
-			fmt.Fprintf(os.Stderr, "✓ Got response from: %s\n", result.apiURL)
+				if strings.HasPrefix(result.manifest, "DIRECT:") {
+					return result.apiURL, strings.TrimPrefix(result.manifest, "DIRECT:"), nil
+				}
 
-			if strings.HasPrefix(result.manifest, "DIRECT:") {
-				return result.apiURL, strings.TrimPrefix(result.manifest, "DIRECT:"), nil
+				return result.apiURL, "MANIFEST:" + result.manifest, nil
 			}
-
-			return result.apiURL, "MANIFEST:" + result.manifest, nil
 		} else {
 			errMsg := result.err.Error()
 			if len(errMsg) > 50 {
@@ -1126,6 +1203,17 @@ func getDownloadURLParallel(apis []string, trackID int64, quality string) (strin
 			errors = append(errors, fmt.Sprintf("%s: %s", result.apiURL, errMsg))
 			lastError = result.err
 		}
+	}
+
+	// If we have a lossy fallback (AAC), use it — DownloadFromManifest will
+	// convert it to FLAC via ffmpeg.
+	if lossyFallback != nil {
+		fmt.Fprintln(os.Stderr, "No FLAC APIs available. Using AAC fallback (will convert to FLAC):")
+		for _, e := range errors {
+			fmt.Fprintf(os.Stderr, "  ~ %s\n", e)
+		}
+		rawManifest := strings.TrimPrefix(lossyFallback.manifest, "LOSSY:")
+		return lossyFallback.apiURL, "MANIFEST:" + rawManifest, nil
 	}
 
 	fmt.Fprintln(os.Stderr, "All APIs failed:")

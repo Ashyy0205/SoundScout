@@ -3,6 +3,7 @@ package backend
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 )
@@ -55,34 +56,45 @@ func GetFFmpegDir() (string, error) {
 }
 
 func GetFFmpegPath() (string, error) {
-	ffmpegDir, err := GetFFmpegDir()
-	if err != nil {
-		return "", err
-	}
-
 	ffmpegName := "ffmpeg"
 	if runtime.GOOS == "windows" {
 		ffmpegName = "ffmpeg.exe"
 	}
 
-	return filepath.Join(ffmpegDir, ffmpegName), nil
+	// 1. Check the dedicated app directory (~/.scraper/).
+	if ffmpegDir, err := GetFFmpegDir(); err == nil {
+		candidate := filepath.Join(ffmpegDir, ffmpegName)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+
+	// 2. Fall back to PATH (e.g. system-installed ffmpeg).
+	if pathBin, err := exec.LookPath(ffmpegName); err == nil {
+		return pathBin, nil
+	}
+
+	return "", fmt.Errorf("ffmpeg not found: place ffmpeg in ~/.scraper/ or ensure it is on PATH")
 }
 
 func GetFFprobePath() (string, error) {
-	ffmpegDir, err := GetFFmpegDir()
-	if err != nil {
-		return "", err
-	}
-
 	ffprobeName := "ffprobe"
 	if runtime.GOOS == "windows" {
 		ffprobeName = "ffprobe.exe"
 	}
 
-	ffprobePath := filepath.Join(ffmpegDir, ffprobeName)
-	if _, err := os.Stat(ffprobePath); err == nil {
-		return ffprobePath, nil
+	// 1. Check the dedicated app directory.
+	if ffmpegDir, err := GetFFmpegDir(); err == nil {
+		candidate := filepath.Join(ffmpegDir, ffprobeName)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
 	}
 
-	return "", fmt.Errorf("ffprobe not found in app directory")
+	// 2. Fall back to PATH.
+	if pathBin, err := exec.LookPath(ffprobeName); err == nil {
+		return pathBin, nil
+	}
+
+	return "", fmt.Errorf("ffprobe not found in app directory or PATH")
 }
