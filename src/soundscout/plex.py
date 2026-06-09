@@ -8,6 +8,7 @@ import socket
 from urllib.parse import urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
 
 from plexapi.server import PlexServer
@@ -45,6 +46,9 @@ class PlexClient:
         def _make_session() -> requests.Session:
             sess = requests.Session()
             sess.verify = verify_ssl
+            adapter = HTTPAdapter(pool_connections=25, pool_maxsize=25)
+            sess.mount("http://", adapter)
+            sess.mount("https://", adapter)
             # Don't force an Accept header; Plex APIs default to XML and plexapi expects that.
             # Also don't set X-Plex-Token here; plexapi attaches it per-request.
             sess.headers.update(
