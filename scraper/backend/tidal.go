@@ -854,13 +854,26 @@ func (t *TidalDownloader) DownloadByURLWithFallback(tidalURL, outputDir, quality
 
 	successAPI, downloadURL, err := getDownloadURLParallel(apis, trackInfo.ID, quality)
 	if err != nil {
-		return "", err
+		fmt.Fprintf(os.Stderr, "  All Tidal APIs failed (%v), trying community endpoint...\n", err)
+		communityURL, communityErr := t.getTidalCommunityDownloadURL(trackInfo.ID, quality)
+		if communityErr != nil {
+			return "", fmt.Errorf("all Tidal APIs and community endpoint failed (API error: %v, community error: %v)", err, communityErr)
+		}
+		downloadURL = communityURL
+		successAPI = ""
+		fmt.Fprintln(os.Stderr, "✓ Got download URL from Tidal community endpoint")
 	}
 
 	fmt.Fprintf(os.Stderr, "Downloading to: %s\n", outputFilename)
-	downloader := NewTidalDownloader(successAPI)
-	if err := downloader.DownloadFile(downloadURL, outputFilename); err != nil {
-		return "", err
+	if successAPI != "" {
+		downloader := NewTidalDownloader(successAPI)
+		if err := downloader.DownloadFile(downloadURL, outputFilename); err != nil {
+			return "", err
+		}
+	} else {
+		if err := t.DownloadFile(downloadURL, outputFilename); err != nil {
+			return "", err
+		}
 	}
 
 	fmt.Fprintln(os.Stderr, "Adding metadata...")

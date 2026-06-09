@@ -615,6 +615,245 @@ func (a *AmazonDownloader) DownloadFromLucida(amazonURL, outputDir, quality stri
 	return filePath, nil
 }
 
+func amazonRemuxWithFFmpeg(inputPath, outputPath, targetExt string) error {
+	ffmpegPath, err := GetFFmpegPath()
+	if err != nil {
+		return fmt.Errorf("ffmpeg not found for remux: %w", err)
+	}
+	if err := ValidateExecutable(ffmpegPath); err != nil {
+		return fmt.Errorf("invalid ffmpeg executable: %w", err)
+	}
+
+	runFFmpeg := func(args ...string) (string, error) {
+		cmd := exec.Command(ffmpegPath, args...)
+		setHideWindow(cmd)
+		output, err := cmd.CombinedOutput()
+		return string(output), err
+	}
+
+	args := []string{"-y", "-i", inputPath, "-map", "0:a:0", "-vn", "-c:a", "copy"}
+	if targetExt == ".m4a" {
+		args = append(args, "-f", "mp4")
+	}
+	args = append(args, outputPath)
+
+	if output, err := runFFmpeg(args...); err != nil {
+		if targetExt == ".flac" {
+			if _, err2 := runFFmpeg("-y", "-i", inputPath, "-map", "0:a:0", "-vn", "-c:a", "flac", outputPath); err2 == nil {
+				return nil
+			}
+		}
+		if len(output) > 500 {
+			output = output[len(output)-500:]
+		}
+		return fmt.Errorf("ffmpeg remux failed: %v\nTail Output: %s", err, output)
+	}
+	return nil
+}
+
+func amazonCommunityNormalizeQuality(quality string) string {
+	switch strings.ToLower(strings.TrimSpace(quality)) {
+	case "16", "lossless", "cd":
+		return "16"
+	case "atmos", "eac3", "dolby":
+		return "atmos"
+	default:
+		return "24"
+	}
+}
+
+type amazonCommunityResponse struct {
+	ASIN      string   `json:"asin"`
+	Codec     string   `json:"codec"`
+	BitDepth  int      `json:"bit_depth"`
+	URL       string   `json:"url"`
+	StreamURL string   `json:"stream_url"`
+	Key       string   `json:"key"`
+	KeySpecs  []string `json:"key_specs"`
+	Captcha   string   `json:"captcha"`
+}
+
+func amazonFFmpegDecrypt(keySpecs []string, inputPath, outputPath string) error {
+	var key string
+	for _, spec := range keySpecs {
+		spec = strings.TrimSpace(spec)
+		if strings.Contains(spec, ":") {
+			parts := strings.SplitN(spec, ":", 2)
+			if len(parts) == 2 {
+				key = strings.TrimSpace(parts[1])
+			}
+		} else if spec != "" {
+			key = spec
+		}
+		if key != "" {
+			break
+		}
+	}
+
+	if key == "" {
+		return fmt.Errorf("no valid decryption key found in keySpecs")
+	}
+
+	ffmpegPath, err := GetFFmpegPath()
+	if err != nil {
+		return fmt.Errorf("ffmpeg not found for decryption: %w", err)
+	}
+	if err := ValidateExecutable(ffmpegPath); err != nil {
+		return fmt.Errorf("invalid ffmpeg executable: %w", err)
+	}
+
+	cmd := exec.Command(ffmpegPath,
+		"-decryption_key", key,
+		"-i", inputPath,
+		"-c", "copy",
+		"-y",
+		outputPath,
+	)
+	setHideWindow(cmd)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		outStr := string(out)
+		if len(outStr) > 500 {
+			outStr = outStr[len(outStr)-500:]
+		}
+		return fmt.Errorf("ffmpeg decryption failed: %v\nTail: %s", err, outStr)
+	}
+
+	if info, err := os.Stat(outputPath); err != nil || info.Size() == 0 {
+		return fmt.Errorf("decrypted file missing or empty")
+	}
+
+	return nil
+}
+
+func (a *AmazonDownloader) downloadFromCommunity(amazonURL, outputDir, quality string) (string, error) {
+	asinRegex := regexp.MustCompile(`(B[0-9A-Z]{9})`)
+	asin := asinRegex.FindString(amazonURL)
+	if asin == "" {
+		return "", fmt.Errorf("failed to extract ASIN from URL: %s", amazonURL)
+	}
+
+	payload, err := json.Marshal(map[string]string{
+		"id":      asin,
+		"quality": amazonCommunityNormalizeQuality(quality),
+		"country": "US",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	fmt.Fprintf(os.Stderr, "Fetching from Amazon community API (ASIN: %s)...\n", asin)
+	resp, err := doCommunityRequest(a.client, "Amazon", func() (*http.Request, error) {
+		req, err := NewRequestWithDefaultHeaders(http.MethodPost, GetAmazonCommunityDownloadURL(), bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		if err := setCommunityRequestHeaders(req); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("Amazon community API returned status %d", resp.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var apiResp amazonCommunityResponse
+	if err := json.Unmarshal(bodyBytes, &apiResp); err != nil {
+		return "", fmt.Errorf("failed to decode community response: %w", err)
+	}
+
+	streamURL := strings.TrimSpace(apiResp.StreamURL)
+	if streamURL == "" {
+		streamURL = strings.TrimSpace(apiResp.URL)
+	}
+	if streamURL == "" {
+		return "", fmt.Errorf("no stream URL found in community response")
+	}
+
+	keySpecs := apiResp.KeySpecs
+	if len(keySpecs) == 0 {
+		if key := strings.TrimSpace(apiResp.Key); key != "" {
+			keySpecs = []string{key}
+		}
+	}
+
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return "", err
+	}
+
+	encryptedPath := filepath.Join(outputDir, fmt.Sprintf("%s.encrypted.mp4", asin))
+	out, err := os.Create(encryptedPath)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		out.Close()
+		os.Remove(encryptedPath)
+	}()
+
+	dlReq, err := NewRequestWithDefaultHeaders(http.MethodGet, streamURL, nil)
+	if err != nil {
+		return "", err
+	}
+	if captcha := strings.TrimSpace(apiResp.Captcha); captcha != "" {
+		dlReq.Header.Set("x-captcha-token", captcha)
+	}
+
+	dlResp, err := a.client.Do(dlReq)
+	if err != nil {
+		return "", err
+	}
+	defer dlResp.Body.Close()
+
+	fmt.Fprintf(os.Stderr, "Downloading track: %s\n", asin)
+	pw := NewProgressWriter(out)
+	if _, err = io.Copy(pw, dlResp.Body); err != nil {
+		return "", err
+	}
+	out.Close()
+
+	fmt.Fprintf(os.Stderr, "\rDownloaded: %.2f MB (Complete)\n", float64(pw.GetTotal())/(1024*1024))
+
+	remuxInput := encryptedPath
+	if len(keySpecs) > 0 {
+		fmt.Println("Decrypting file...")
+		decryptedPath := filepath.Join(outputDir, fmt.Sprintf("%s.decrypted.mp4", asin))
+		if err := amazonFFmpegDecrypt(keySpecs, encryptedPath, decryptedPath); err != nil {
+			return "", err
+		}
+		defer os.Remove(decryptedPath)
+		remuxInput = decryptedPath
+		fmt.Println("Decryption successful")
+	}
+
+	targetExt := ".flac"
+	if codec := strings.ToLower(strings.TrimSpace(apiResp.Codec)); codec == "eac3" || codec == "ec-3" || codec == "ac-3" {
+		targetExt = ".m4a"
+	}
+	finalPath := filepath.Join(outputDir, asin+targetExt)
+
+	if err := amazonRemuxWithFFmpeg(remuxInput, finalPath, targetExt); err != nil {
+		return "", err
+	}
+
+	if info, err := os.Stat(finalPath); err != nil || info.Size() == 0 {
+		return "", fmt.Errorf("remuxed file missing or empty")
+	}
+
+	return finalPath, nil
+}
+
 func (a *AmazonDownloader) DownloadFromService(amazonURL, outputDir, quality string) (string, error) {
 	// Try the AfkarXYZ API (amazon.spotbye.qzz.io) first — most reliable.
 	fmt.Fprintln(os.Stderr, "Attempting download via AfkarXYZ (Priority)...")
@@ -628,7 +867,13 @@ func (a *AmazonDownloader) DownloadFromService(amazonURL, outputDir, quality str
 	if err == nil {
 		return filePath, nil
 	}
-	fmt.Fprintf(os.Stderr, "Lucida failed: %v\nTrying Double-Double as fallback...\n", err)
+	fmt.Fprintf(os.Stderr, "Lucida failed: %v\nTrying community endpoint as fallback...\n", err)
+
+	filePath, err = a.downloadFromCommunity(amazonURL, outputDir, quality)
+	if err == nil {
+		return filePath, nil
+	}
+	fmt.Fprintf(os.Stderr, "Community endpoint failed: %v\nTrying Double-Double as fallback...\n", err)
 
 	var lastError error
 	lastError = err

@@ -41,6 +41,9 @@ var (
 	currentSpeed        float64
 	speedLock           sync.RWMutex
 
+	rateLimitUntilMs int64
+	rateLimitLock    sync.RWMutex
+
 	downloadQueue       []DownloadItem
 	downloadQueueLock   sync.RWMutex
 	currentItemID       string
@@ -55,6 +58,37 @@ type ProgressInfo struct {
 	IsDownloading bool    `json:"is_downloading"`
 	MBDownloaded  float64 `json:"mb_downloaded"`
 	SpeedMBps     float64 `json:"speed_mbps"`
+	RateLimited   bool    `json:"rate_limited"`
+	RateLimitSecs int     `json:"rate_limit_secs"`
+}
+
+func SetRateLimitCooldown(seconds float64) {
+	rateLimitLock.Lock()
+	if seconds <= 0 {
+		rateLimitUntilMs = 0
+	} else {
+		rateLimitUntilMs = getCurrentTimeMillis() + int64(seconds*1000)
+	}
+	rateLimitLock.Unlock()
+}
+
+func ClearRateLimitCooldown() {
+	rateLimitLock.Lock()
+	rateLimitUntilMs = 0
+	rateLimitLock.Unlock()
+}
+
+func CancelQueuedAndDownloadingItems() {
+	downloadQueueLock.Lock()
+	defer downloadQueueLock.Unlock()
+
+	for i := range downloadQueue {
+		if downloadQueue[i].Status == StatusQueued || downloadQueue[i].Status == StatusDownloading {
+			downloadQueue[i].Status = StatusFailed
+			downloadQueue[i].EndTime = getCurrentTimeMillis() / 1000
+			downloadQueue[i].ErrorMessage = "Cancelled"
+		}
+	}
 }
 
 type DownloadQueueInfo struct {

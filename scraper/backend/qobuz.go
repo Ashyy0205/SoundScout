@@ -439,6 +439,13 @@ func (q *QobuzDownloader) GetDownloadURL(trackID int64, quality string) (string,
 	resp, err = q.client.Get(fallback2URL)
 	if err != nil {
 		parseErrors = append(parseErrors, fmt.Sprintf("fallback#2 request error: %v", err))
+		fmt.Fprintln(os.Stderr, "All standard APIs failed, trying community endpoint...")
+		communityURL, communityErr := q.getQobuzCommunityDownloadURL(trackID, qualityCode)
+		if communityErr == nil {
+			fmt.Fprintln(os.Stderr, "✓ Got download URL from Qobuz community endpoint")
+			return communityURL, nil
+		}
+		parseErrors = append(parseErrors, fmt.Sprintf("community: %v", communityErr))
 		return "", fmt.Errorf("all APIs failed to get download URL: %s", strings.Join(parseErrors, " | "))
 	}
 	defer resp.Body.Close()
@@ -450,6 +457,13 @@ func (q *QobuzDownloader) GetDownloadURL(trackID int64, quality string) (string,
 			bodyStr = bodyStr[:120] + "..."
 		}
 		parseErrors = append(parseErrors, fmt.Sprintf("fallback#2 status %d: %s", resp.StatusCode, bodyStr))
+		fmt.Fprintln(os.Stderr, "All standard APIs failed, trying community endpoint...")
+		communityURL, communityErr := q.getQobuzCommunityDownloadURL(trackID, qualityCode)
+		if communityErr == nil {
+			fmt.Fprintln(os.Stderr, "✓ Got download URL from Qobuz community endpoint")
+			return communityURL, nil
+		}
+		parseErrors = append(parseErrors, fmt.Sprintf("community: %v", communityErr))
 		return "", fmt.Errorf("all APIs returned non-200 status: %s", strings.Join(parseErrors, " | "))
 	}
 
@@ -467,11 +481,20 @@ func (q *QobuzDownloader) GetDownloadURL(trackID int64, quality string) (string,
 	streamURL, parseErr := extractQobuzDownloadURL(body)
 	if parseErr != nil {
 		parseErrors = append(parseErrors, fmt.Sprintf("fallback#2 parse error: %v", parseErr))
-		return "", fmt.Errorf("no usable download URL from any API: %s", strings.Join(parseErrors, " | "))
+	} else {
+		fmt.Fprintf(os.Stderr, "✓ Got download URL from Fallback API #2\n")
+		return streamURL, nil
 	}
 
-	fmt.Fprintf(os.Stderr, "✓ Got download URL from Fallback API #2\n")
-	return streamURL, nil
+	fmt.Fprintln(os.Stderr, "All standard APIs failed, trying community endpoint...")
+	communityURL, communityErr := q.getQobuzCommunityDownloadURL(trackID, qualityCode)
+	if communityErr == nil {
+		fmt.Fprintln(os.Stderr, "✓ Got download URL from Qobuz community endpoint")
+		return communityURL, nil
+	}
+	parseErrors = append(parseErrors, fmt.Sprintf("community: %v", communityErr))
+
+	return "", fmt.Errorf("no usable download URL from any API or community: %s", strings.Join(parseErrors, " | "))
 }
 
 func (q *QobuzDownloader) DownloadFile(url, filepath string) error {
